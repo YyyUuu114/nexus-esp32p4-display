@@ -24,6 +24,6 @@ The pinned LibreHardwareMonitor archive and primary library passed their SHA-256
 
 | Asset | Size | SHA-256 |
 | --- | ---: | --- |
-| `NEXUS-Display-Windows-x64.zip` | 48,992,299 bytes | `ADCACF89E438954E6C3711AE97586A1F3BA052D2F8BDC9FE79D21541D899B27A` |
+| `NEXUS-Display-Windows-x64.zip` | 48,992,553 bytes | `AC0CD0134E10AED904EA5315CF3E4115B169EAC542A3ECE061D984B44FF57711` |
 
 This ZIP is a local validation artifact and is not attached to the stable v1.1.0 GitHub Release.
