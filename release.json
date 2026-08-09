@@ -13,6 +13,6 @@
   "pairedDesktopVersion": "1.1.0",
   "supportedDesktopVersions": {
     "minimum": "1.1.0",
-    "maximumExclusive": "1.2.0"
+    "maximumExclusive": "2.0.0"
   }
 }
