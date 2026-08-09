@@ -1,0 +1,16 @@
+# ESP-IDF generated state
+/build/
+/sdkconfig
+/sdkconfig.old
+/managed_components/
+
+# Editor and operating-system state
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Release artifacts are attached to GitHub Releases, not committed to branches.
+*.bin
+*.zip
+SHA256SUMS.txt
