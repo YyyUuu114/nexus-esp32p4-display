@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>assets\nexus-display.ico</ApplicationIcon>
+    <Version>1.1.0</Version>
+    <AssemblyVersion>$(Version).0</AssemblyVersion>
+    <FileVersion>$(Version).0</FileVersion>
+    <InformationalVersion>$(Version)</InformationalVersion>
+    <AssemblyName>Nexus Display</AssemblyName>
+    <RootNamespace>NexusDisplay</RootNamespace>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <PublishTrimmed>false</PublishTrimmed>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- The pinned LibreHardwareMonitor .NET 10 Windows archive exposes
+         System.IO.Ports analyzer metadata as Unix-only. The application and
+         selected runtime assembly are Windows-specific and are validated on
+         Windows 10/11, so this package metadata false positive is suppressed. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <RepositoryUrl>https://github.com/YyyUuu114/nexus-esp32p4-display</RepositoryUrl>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <Copyright>Copyright 2026 YyyUuu114</Copyright>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="LibreHardwareMonitorLib">
+      <HintPath>vendor\LibreHardwareMonitor\LibreHardwareMonitorLib.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="System.IO.Ports">
+      <HintPath>vendor\LibreHardwareMonitor\runtimes\win\lib\net10.0\System.IO.Ports.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="System.Management">
+      <HintPath>vendor\LibreHardwareMonitor\runtimes\win\lib\net10.0\System.Management.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

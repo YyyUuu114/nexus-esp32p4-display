@@ -1,0 +1,20 @@
+# .NET generated state
+/bin/
+/obj/
+/artifacts/
+
+# Restored third-party binaries
+/vendor/
+
+# Editor and operating-system state
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Release assets are attached to GitHub Releases.
+*.zip
+*.exe
+*.dll
+*.pdb
+SHA256SUMS.txt
