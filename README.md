@@ -1,5 +1,8 @@
 # NEXUS ESP32-P4 Display Firmware
 
+[![简体中文](https://img.shields.io/badge/语言-简体中文-00d9ff)](README.md)
+[![English](https://img.shields.io/badge/Language-English-6dff39)](README.en.md)
+
 [![Release](https://img.shields.io/badge/release-v1.1.0-00d9ff)](https://github.com/YyyUuu114/nexus-esp32p4-display/releases/tag/v1.1.0)
 [![Protocol](https://img.shields.io/badge/protocol-1.1-6dff39)](COMPATIBILITY.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -49,4 +52,4 @@ idf.py build
 
 ## 许可与安全
 
-本项目自有源代码采用 Apache License 2.0。字体、BSP、LVGL 等依赖的许可与固定版本见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。安全问题请按 [SECURITY.md](SECURITY.md) 提交，不应在公开 Issue 中披露未修复漏洞或设备标识信息。
+本项目自有源代码采用 Apache License 2.0。字体、BSP、LVGL 等依赖的许可与固定版本见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目是个人开发者的学习与研究分享，不提供安全性或软硬件损坏保证；完整风险声明和私密报告方式见 [SECURITY.md](SECURITY.md)。
