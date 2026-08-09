@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
   "component": "firmware",
-  "productVersion": "1.1.0",
-  "channel": "stable",
-  "branch": "firmware-stable",
+  "productVersion": "1.2.1",
+  "channel": "development",
+  "branch": "firmware-dev",
   "wireProtocol": {
     "major": 1,
     "revision": 1
   },
-  "updateClass": "paired-baseline",
-  "peerUpdateRequired": true,
-  "pairedDesktopVersion": "1.1.0",
+  "updateClass": "single-endpoint",
+  "peerUpdateRequired": false,
+  "pairedDesktopVersion": null,
   "supportedDesktopVersions": {
     "minimum": "1.1.0",
-    "maximumExclusive": "1.2.0"
+    "maximumExclusive": "2.0.0"
   }
 }

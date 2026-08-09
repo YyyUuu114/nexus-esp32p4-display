@@ -1,12 +1,14 @@
 # NEXUS ESP32-P4 Display Firmware
 
-[![Release](https://img.shields.io/badge/release-v1.1.0-00d9ff)](https://github.com/YyyUuu114/nexus-esp32p4-display/releases/tag/v1.1.0)
+[![Development](https://img.shields.io/badge/development-v1.2.1-f3b61f)](release.json)
 [![Protocol](https://img.shields.io/badge/protocol-1.1-6dff39)](COMPATIBILITY.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 NEXUS 将 ESP32-P4-Function-EV-Board 与 1024 × 600 MIPI-DSI 显示套件配置为 Windows 主机遥测副屏。固件通过 ESP32-P4 原生 USB Serial/JTAG 接口接收逐行 JSON，在 LVGL 中显示 CPU、GPU、内存、网络、风扇、温度、功耗和本次桌面应用运行期间的累计能耗。
 
-本分支为固件正式发布分支，当前版本为 **1.1.0**。对应的 Windows 正式版源代码位于 [`desktop-stable`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/desktop-stable)；开发分支分别为 [`firmware-dev`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/firmware-dev) 与 [`desktop-dev`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/desktop-dev)。
+本分支为固件开发分支，当前版本为 **1.2.1**，不作为正式部署基线。正式固件位于 [`firmware-stable`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/firmware-stable)，对应的 Windows 开发分支位于 [`desktop-dev`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/desktop-dev)。
+
+v1.2.1 仅建立下一发布线的开发通道，线协议保持 1.1，更新分类为 `single-endpoint`。它可继续与桌面端 v1.1.0 通信，不要求同步更新桌面端。
 
 ## 运行特性
 
