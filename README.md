@@ -1,5 +1,8 @@
 # NEXUS Display for Windows
 
+[![简体中文](https://img.shields.io/badge/语言-简体中文-00d9ff)](README.md)
+[![English](https://img.shields.io/badge/Language-English-6dff39)](README.en.md)
+
 [![Development](https://img.shields.io/badge/development-v1.2.1-f3b61f)](release.json)
 [![Protocol](https://img.shields.io/badge/protocol-1.1-6dff39)](COMPATIBILITY.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078d4)](docs/BUILD.md)
@@ -60,4 +63,4 @@ v1.2.1 仅建立下一发布线的开发通道，线协议保持 1.1，更新分
 
 ## 许可与安全
 
-本项目自有源代码采用 Apache License 2.0。LibreHardwareMonitor、.NET 与其他依赖的版本、来源和许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。安全问题请按 [SECURITY.md](SECURITY.md) 私密报告。
+本项目自有源代码采用 Apache License 2.0。LibreHardwareMonitor、.NET 与其他依赖的版本、来源和许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目是个人开发者的学习与研究分享，不提供安全性或软硬件损坏保证；完整风险声明和私密报告方式见 [SECURITY.md](SECURITY.md)。
