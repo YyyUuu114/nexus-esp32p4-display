@@ -13,7 +13,7 @@ $containerRoot = Join-Path $artifactRoot 'NEXUS-Display-Windows-x64'
 $packageRoot = Join-Path $containerRoot 'NEXUS Display'
 $zipPath = Join-Path $artifactRoot 'NEXUS-Display-Windows-x64.zip'
 
-& (Join-Path $PSScriptRoot 'validate-release.ps1') -Component desktop -Channel stable
+& (Join-Path $PSScriptRoot 'validate-release.ps1') -Component desktop -Channel development
 & (Join-Path $PSScriptRoot 'restore-lhm.ps1')
 
 foreach ($target in @($publishRoot, $containerRoot, $zipPath)) {

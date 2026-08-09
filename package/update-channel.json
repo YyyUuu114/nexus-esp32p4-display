@@ -1,4 +1,4 @@
 {
-  "channel": "stable",
-  "manifestUrl": "https://raw.githubusercontent.com/YyyUuu114/nexus-esp32p4-display/desktop-stable/update/latest.json"
+  "channel": "development",
+  "manifestUrl": ""
 }

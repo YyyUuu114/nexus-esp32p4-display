@@ -1,20 +1,24 @@
 # NEXUS Display for Windows
 
-[![Release](https://img.shields.io/badge/release-v1.1.0-00d9ff)](https://github.com/YyyUuu114/nexus-esp32p4-display/releases/tag/v1.1.0)
+[![Development](https://img.shields.io/badge/development-v1.2.1-f3b61f)](release.json)
 [![Protocol](https://img.shields.io/badge/protocol-1.1-6dff39)](COMPATIBILITY.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078d4)](docs/BUILD.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 NEXUS Display 是 ESP32-P4 主机状态副屏的 Windows 托盘采集器。应用读取 CPU、GPU、内存、网络、风扇、温度和功耗，以 1 Hz 通过 ESP32-P4 原生 USB Serial/JTAG 发送遥测，并累计本次应用运行期间的 CPU 与 GPU 可用功耗。
 
-本分支为桌面端正式发布分支，当前版本为 **1.1.0**。配套固件源代码位于 [`firmware-stable`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/firmware-stable)；开发分支分别为 [`desktop-dev`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/desktop-dev) 与 [`firmware-dev`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/firmware-dev)。
+本分支为桌面端开发分支，当前版本为 **1.2.1**，不作为正式部署基线。正式桌面端位于 [`desktop-stable`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/desktop-stable)，固件开发分支位于 [`firmware-dev`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/firmware-dev)。
 
-## 最短使用路径
+v1.2.1 仅建立下一发布线的开发通道，线协议保持 1.1，更新分类为 `single-endpoint`。它可继续与固件 v1.1.0 通信，不要求同步更新固件。
 
-1. 从 [v1.1.0 Release](https://github.com/YyyUuu114/nexus-esp32p4-display/releases/tag/v1.1.0) 下载 `NEXUS-Display-Windows-x64.zip`。
+## 开发版使用路径
+
+1. 按“从源码构建”生成开发包。
 2. 完整解压 ZIP；不要直接在压缩软件内运行。
 3. 双击 `NEXUS Display\01-启动程序.cmd` 或 `Nexus Display.exe`。
 4. 需要登录后自动运行时，双击 `02-启用开机自启.cmd`；取消时双击 `03-取消开机自启.cmd`。
+
+生产环境应使用 [v1.1.0 正式 Release](https://github.com/YyyUuu114/nexus-esp32p4-display/releases/tag/v1.1.0)。
 
 发布包自带 .NET 运行时，不要求目标电脑安装 .NET SDK。读取部分主板传感器需要管理员权限，因此手动启动时会出现 Windows UAC 提示。
 

@@ -2,7 +2,7 @@ namespace NexusDisplay;
 
 internal static class BuildInfo
 {
-    public const string ReleaseChannel = "stable";
+    public const string ReleaseChannel = "development";
     public const int ProtocolMajor = 1;
     public const int ProtocolRevision = 1;
     public const string SupportedFirmwareVersion = "1.1.0";

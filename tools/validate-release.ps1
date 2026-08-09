@@ -35,6 +35,59 @@ if ($Channel -eq 'development' -and ($channelNumber -lt 1 -or $channelNumber -gt
     throw 'Development releases must use product version channel 1 through 9.'
 }
 
+function Get-SourceConstant([string]$Content, [string]$Name) {
+    $pattern = '(?m)^\s*(?:public\s+const\s+(?:string|int)|#define)\s+{0}\s+(?:=\s*)?"?([^";\s]+)' -f [regex]::Escape($Name)
+    $match = [regex]::Match($Content, $pattern)
+    if (-not $match.Success) {
+        throw "Required source constant was not found: $Name"
+    }
+    return $match.Groups[1].Value
+}
+
+if ($Component -eq 'desktop') {
+    [xml]$project = Get-Content -LiteralPath (Join-Path $repositoryRoot 'NexusDisplayAgent.csproj') -Raw
+    $projectVersion = [string]$project.Project.PropertyGroup.Version
+    if ($projectVersion -ne $release.productVersion) {
+        throw "Project version '$projectVersion' does not match release.json '$($release.productVersion)'."
+    }
+
+    $buildInfo = Get-Content -LiteralPath (Join-Path $repositoryRoot 'BuildInfo.cs') -Raw
+    if ((Get-SourceConstant $buildInfo 'ReleaseChannel') -ne $Channel) {
+        throw 'BuildInfo release channel does not match release.json.'
+    }
+    if ([int](Get-SourceConstant $buildInfo 'ProtocolMajor') -ne $release.wireProtocol.major -or
+        [int](Get-SourceConstant $buildInfo 'ProtocolRevision') -ne $release.wireProtocol.revision) {
+        throw 'BuildInfo protocol version does not match release.json.'
+    }
+
+    $updateChannel = Get-Content -LiteralPath (Join-Path $repositoryRoot 'package\update-channel.json') -Raw | ConvertFrom-Json
+    if ($updateChannel.channel -ne $Channel) {
+        throw 'Packaged update channel does not match release.json.'
+    }
+    if ($Channel -eq 'stable' -and
+        (-not [Uri]::IsWellFormedUriString($updateChannel.manifestUrl, [UriKind]::Absolute) -or
+         -not $updateChannel.manifestUrl.StartsWith('https://', [System.StringComparison]::OrdinalIgnoreCase))) {
+        throw 'Stable builds require an absolute HTTPS update manifest URL.'
+    }
+}
+else {
+    $cmake = Get-Content -LiteralPath (Join-Path $repositoryRoot 'CMakeLists.txt') -Raw
+    $cmakeVersion = [regex]::Match($cmake, 'set\(PROJECT_VER\s+"([^"]+)"\)').Groups[1].Value
+    if ($cmakeVersion -ne $release.productVersion) {
+        throw "CMake project version '$cmakeVersion' does not match release.json '$($release.productVersion)'."
+    }
+
+    $versionHeader = Get-Content -LiteralPath (Join-Path $repositoryRoot 'main\version.h') -Raw
+    if ((Get-SourceConstant $versionHeader 'NEXUS_FIRMWARE_VERSION') -ne $release.productVersion -or
+        (Get-SourceConstant $versionHeader 'NEXUS_RELEASE_CHANNEL') -ne $Channel) {
+        throw 'Firmware source version or channel does not match release.json.'
+    }
+    if ([int](Get-SourceConstant $versionHeader 'NEXUS_PROTOCOL_VERSION') -ne $release.wireProtocol.major -or
+        [int](Get-SourceConstant $versionHeader 'NEXUS_PROTOCOL_REVISION') -ne $release.wireProtocol.revision) {
+        throw 'Firmware protocol version does not match release.json.'
+    }
+}
+
 $trackedFiles = @(& git -c core.quotePath=false -C $repositoryRoot ls-files)
 if ($LASTEXITCODE -ne 0 -or $trackedFiles.Count -eq 0) {
     throw 'No tracked release files were found.'
