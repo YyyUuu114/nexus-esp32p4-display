@@ -39,7 +39,7 @@
 1. 两端声明相同的 `WIRE_MAJOR`。
 2. 固件的桌面端支持范围包含实际桌面端产品版本。
 3. 桌面端的固件支持范围包含实际固件产品版本。
-4. 若任一端发布元数据声明 `peerUpdateRequired=true`，另一端必须满足该发布指定的配对版本。
+`peerUpdateRequired` 描述升级到该发布时是否必须同时更新另一端，不是永久运行时锁定。`pairedFirmwareVersion` 或 `pairedDesktopVersion` 记录该发布完成验证的配对基线；后续 `single-endpoint` 发布只要仍满足上述三个运行时条件，即可与该基线混用。
 
 `WIRE_REVISION` 不相等时，只允许使用双方共同支持的字段集合。较新端不得把新增字段设为旧端运行所必需。
 
@@ -47,8 +47,8 @@
 
 | 端点 | 产品版本 | 通道 | 线协议 | 支持的另一端 |
 | --- | --- | --- | --- | --- |
-| ESP32-P4 固件 | 1.1.0 | stable | 1.1 | Desktop 1.1.0 |
-| Windows 桌面端 | 1.1.0 | stable | 1.1 | Firmware 1.1.0 |
+| ESP32-P4 固件 | 1.1.0 | stable | 1.1 | Desktop 1.x 且线协议主版本为 1；1.1.0 为验证基线 |
+| Windows 桌面端 | 1.1.0 | stable | 1.1 | Firmware 1.x 且线协议主版本为 1；1.1.0 为验证基线 |
 
 v1.1.0 的分类为 `paired-baseline`。后续仅优化某一端且线协议保持 1.1 时，应标记为 `single-endpoint`；新增可选遥测字段时应标记为 `coordinated-additive` 并递增修订号；任何既有字段或单位的不兼容调整必须进入产品主版本 2 与线协议主版本 2，并成对发布。
 
