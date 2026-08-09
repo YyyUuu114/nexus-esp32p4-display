@@ -13,6 +13,6 @@
   "pairedFirmwareVersion": "1.1.0",
   "supportedFirmwareVersions": {
     "minimum": "1.1.0",
-    "maximumExclusive": "1.2.0"
+    "maximumExclusive": "2.0.0"
   }
 }
