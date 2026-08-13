@@ -5,30 +5,41 @@
 - Windows 10 or Windows 11 x64.
 - .NET 10 SDK.
 - PowerShell 7.4 or later.
-- HTTPS access to the official LibreHardwareMonitor GitHub Release and the Microsoft NuGet feed when dependencies are not already cached.
+- HTTPS access to the official LibreHardwareMonitor GitHub Release and Microsoft NuGet feed when caches are empty.
 
-## Dependency restore
+## Dependency restore and tests
 
 ```powershell
 ./tools/restore-lhm.ps1
+dotnet restore ./NexusDisplayAgent.csproj
+dotnet build ./NexusDisplayAgent.csproj -c Release --no-restore
+dotnet run --project ./tests/NexusDisplay.Tests.csproj -c Release
 ```
 
-The script downloads only the v0.9.6 `LibreHardwareMonitor.NET.10.zip` asset, verifies the pinned package SHA-256, extracts into ignored `vendor/`, and verifies the primary library SHA-256. Use `-Force` to replace an existing restored directory.
+`restore-lhm.ps1` downloads only LibreHardwareMonitor v0.9.6 `LibreHardwareMonitor.NET.10.zip`, verifies the pinned archive and primary-DLL SHA-256 values, and extracts into ignored `vendor/`. The console tests require no external test framework and cover product-version ordering, energy monotonicity, handshake validation, ECDSA verification, and the published signed envelope.
 
-## Compile
+Warnings are errors. Deterministic compilation and the single project `<Version>` establish assembly and file version 2.1.1.
+
+## Update-signing key
+
+Create a maintainer key once, outside the repository:
 
 ```powershell
-dotnet build ./NexusDisplayAgent.csproj -c Release
+./tools/new-update-signing-key.ps1 -OutputPath D:\secure\nexus-update-ecdsa-p256.pem
 ```
 
-Warnings are treated as errors. The project uses deterministic compilation and embeds the product version from the single `<Version>` property in `NexusDisplayAgent.csproj`.
+The script prints only the public SubjectPublicKeyInfo value and applies a user-only ACL to the private file. Compare the public value with `package/update-trust.json`; never commit, log, archive, or transmit the private PEM.
 
-## Portable release package
+## Release package
 
 ```powershell
-./tools/build-release.ps1
+./tools/build-release.ps1 `
+  -DotNetPath dotnet `
+  -SigningKeyPath D:\secure\nexus-update-ecdsa-p256.pem
 ```
 
-The script validates release metadata, publishes a self-contained `win-x64` single-file executable, adds launch/startup/update documentation and licenses, creates `artifacts/NEXUS-Display-Windows-x64.zip`, and prints its SHA-256.
+The script validates metadata and source hygiene, restores the pinned dependency, publishes a self-contained `win-x64` single file, assembles the portable folder, creates a versioned ZIP, signs an update envelope, and writes `SHA256SUMS.txt`. It refuses a private key whose public half differs from `package/update-trust.json`.
 
-The source tree does not commit restored DLLs, `bin`, `obj`, `artifacts`, executables, or ZIP files. Release packages belong in GitHub Releases.
+If a trusted Windows code-signing certificate is available in `Cert:\CurrentUser\My`, pass `-AuthenticodeCertificateThumbprint`. This optional step signs the executable before ZIP creation; it does not replace the mandatory project update signature.
+
+Copy the generated envelope into `package/latest-update.json` only after reviewing its decoded payload and package hash. Commit source and the reviewed envelope to `desktop-dev` first, then create the declared GitHub prerelease tag and upload the exact ZIP, envelope, and checksum file. `vendor`, `bin`, `obj`, `artifacts`, executables, private keys, and ZIP files must remain outside branch history.

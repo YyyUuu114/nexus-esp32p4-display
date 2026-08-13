@@ -1,17 +1,27 @@
-# Serial Port Discovery
+# Serial Port Discovery and Device Negotiation
 
-## Primary selection
+## Candidate selection
 
-The application queries `Win32_PnPEntity` and extracts the current `COMx` value from enumerated device names. A port whose PnP device identifier contains Espressif VID `303A` and PID `1001` is selected first. This identifies the ESP32-P4 native USB Serial/JTAG function independently of the COM number assigned by Windows.
+The application queries `Win32_PnPEntity`, extracts each `COMx` suffix, and retains only entries whose PnP identifier contains Espressif VID `303A` and PID `1001`. The last port that completed a handshake during the current process is tried first if it remains enumerated. COM numbers are never persisted or hard-coded.
 
-## Compatibility fallback
+If WMI itself is unavailable, the application may probe names returned by `SerialPort.GetPortNames()` so a restricted management provider does not make recovery impossible. When WMI succeeds but reports no matching Espressif function, generic serial devices are not opened. The former rule that trusted a system's only serial port has been removed.
 
-If the VID/PID query is unavailable, or no matching PnP entry is found, the application reads `SerialPort.GetPortNames()`. A single enumerated port may be selected as a compatibility fallback. If multiple nonmatching ports are present, the application remains disconnected instead of choosing an arbitrary device.
+## Mandatory identity check
 
-The scan repeats every three seconds while disconnected. A connected port failure closes the handle and retries after 2.5 seconds.
+Opening a port is not a successful connection. For each candidate, the application:
+
+1. creates a cryptographically random 128-bit nonce;
+2. sends the protocol-2.0 `hello` object;
+3. waits no more than 1.5 seconds for a bounded UTF-8 JSON line;
+4. rejects duplicate JSON properties, fractional protocol fields, product mismatch, protocol mismatch, unsupported product versions, or a nonce mismatch;
+5. retains the handle only after a valid `ready` response.
+
+Each telemetry frame includes the negotiated nonce. A manual reconnect closes the handle and requires a new nonce. Details are normative in [../PROTOCOL.md](../PROTOCOL.md).
+
+## Retry and overhead
+
+The worker samples hardware once per second even while the board is absent, preserving process-session energy semantics. Candidate discovery is limited to once every three seconds. Serial reads use 200 ms sub-timeouts under an overall 1.5-second handshake deadline; no busy loop is used.
 
 ## Driver requirements
 
-The validated transport does not contain a CH340 bridge and therefore does not require a CH340 driver. Windows 10 and Windows 11 normally bind their inbox USB serial support to the Espressif function. A driver for CH340, CP210x, FTDI, or another bridge is relevant only when that separate bridge is deliberately used.
-
-PnP display strings may be localized; selection depends on VID/PID and the `COMx` suffix, not on the English device description.
+The validated runtime transport is ESP32-P4 native USB Serial/JTAG and does not contain a CH340 bridge. Windows 10 and Windows 11 normally bind their inbox support to the Espressif function. A CH340, CP210x, or FTDI driver is relevant only if that separate external bridge is deliberately used; such a bridge is not part of the validated protocol-2.0 assembly.

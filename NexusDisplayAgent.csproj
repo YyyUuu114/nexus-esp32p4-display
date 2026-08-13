@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>assets\nexus-display.ico</ApplicationIcon>
-    <Version>1.2.1</Version>
+    <Version>2.1.1</Version>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <FileVersion>$(Version).0</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
@@ -36,6 +36,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="tests\**\*.cs" />
     <Reference Include="LibreHardwareMonitorLib">
       <HintPath>vendor\LibreHardwareMonitor\LibreHardwareMonitorLib.dll</HintPath>
       <Private>true</Private>

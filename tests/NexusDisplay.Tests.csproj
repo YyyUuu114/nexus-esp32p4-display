@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>2.1.1</Version>
+    <AssemblyVersion>$(Version).0</AssemblyVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="..\BuildInfo.cs" Link="BuildInfo.cs" />
+    <Compile Include="..\ProductVersion.cs" Link="ProductVersion.cs" />
+    <Compile Include="..\EnergyAccumulator.cs" Link="EnergyAccumulator.cs" />
+    <Compile Include="..\ProtocolHandshake.cs" Link="ProtocolHandshake.cs" />
+    <Compile Include="..\SignatureVerifier.cs" Link="SignatureVerifier.cs" />
+    <Compile Include="..\UpdateTrust.cs" Link="UpdateTrust.cs" />
+    <Compile Include="InstallationManagerStub.cs" />
+  </ItemGroup>
+</Project>

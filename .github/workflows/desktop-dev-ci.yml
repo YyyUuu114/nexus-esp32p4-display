@@ -1,0 +1,34 @@
+name: Desktop development validation
+
+on:
+  push:
+    branches: [desktop-dev]
+  pull_request:
+    branches: [desktop-dev, desktop-stable]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore pinned hardware-monitor dependency
+        shell: pwsh
+        run: ./tools/restore-lhm.ps1
+      - name: Restore, build, and test
+        shell: pwsh
+        run: |
+          dotnet restore ./NexusDisplayAgent.csproj
+          dotnet build ./NexusDisplayAgent.csproj -c Release --no-restore
+          dotnet run --project ./tests/NexusDisplay.Tests.csproj -c Release
+      - name: Validate release metadata and source hygiene
+        shell: pwsh
+        run: ./tools/validate-release.ps1 -Component desktop -Channel development

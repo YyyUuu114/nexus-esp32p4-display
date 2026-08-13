@@ -11,15 +11,33 @@ internal static class Program
         AppLog.Info("APP", $"start v{BuildInfo.DisplayVersion}");
         ApplicationConfiguration.Initialize();
 
-        if (args.Contains("--install-startup", StringComparer.OrdinalIgnoreCase))
+        if (args.Contains("--apply-update", StringComparer.OrdinalIgnoreCase))
         {
-            ShowStartupResult(StartupManager.SetEnabled(true), true);
+            Environment.ExitCode = UpdateManager.RunApplyMode(args);
             return;
         }
 
         if (args.Contains("--remove-startup", StringComparer.OrdinalIgnoreCase))
         {
             ShowStartupResult(StartupManager.SetEnabled(false), false);
+            return;
+        }
+
+        try
+        {
+            if (InstallationManager.EnsureInstalledAndRelaunch(args)) return;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("INSTALL", ex);
+            MessageBox.Show($"安装失败：{AppLog.ExceptionSummary(ex)}", "NEXUS Display",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        if (args.Contains("--install-startup", StringComparer.OrdinalIgnoreCase))
+        {
+            ShowStartupResult(StartupManager.SetEnabled(true), true);
             return;
         }
 

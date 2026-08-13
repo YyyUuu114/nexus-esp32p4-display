@@ -1,36 +1,27 @@
 using System.Diagnostics;
-using System.IO.Compression;
 using System.Net.Http.Headers;
-using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace NexusDisplay;
 
 internal static class UpdateManager
 {
-    private const long MaxPackageBytes = 300L * 1024 * 1024;
-    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = false
+    };
 
     public static async Task<bool> CheckAndPrepareAsync()
     {
         try
         {
-            UpdateChannel? channel = LoadUpdateChannel();
-            if (channel is null || string.IsNullOrWhiteSpace(channel.ManifestUrl))
-                return await SelectLocalPackageAsync();
-
-            if (!channel.Channel.Equals(BuildInfo.ReleaseChannel, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("更新通道与当前程序不匹配");
-
-            if (!Uri.TryCreate(channel.ManifestUrl, UriKind.Absolute, out Uri? manifestUri) || manifestUri.Scheme != Uri.UriSchemeHttps)
-                throw new InvalidOperationException("更新清单必须使用 HTTPS 地址");
-
-            using var client = CreateClient();
-            string json = await client.GetStringAsync(manifestUri);
-            UpdateManifest manifest = JsonSerializer.Deserialize<UpdateManifest>(json, JsonOptions)
-                ?? throw new InvalidDataException("更新清单格式无效");
-            ValidateManifest(manifest);
-            Version available = ParseVersion(manifest.Version);
+            Uri manifestUri = LoadManifestUri();
+            using HttpClient client = CreateClient();
+            string envelopeJson = await DownloadTextAsync(client, manifestUri, 128 * 1024);
+            UpdatePayload payload = UpdateTrust.VerifyEnvelope(envelopeJson);
+            ProductVersion available = ProductVersion.Parse(payload.Version);
             if (available <= BuildInfo.Current)
             {
                 MessageBox.Show($"当前 v{BuildInfo.DisplayVersion} 已是最新版。", "NEXUS Display 更新",
@@ -38,24 +29,38 @@ internal static class UpdateManager
                 return false;
             }
 
-            string compatibilityNotice = manifest.PeerUpdateRequired
-                ? $"\n\n此版本要求配套固件 {manifest.PairedFirmwareVersion ?? "指定版本"}，必须同步更新。"
+            string compatibilityNotice = payload.PeerUpdateRequired
+                ? $"\n\n此版本要求配套固件 v{payload.PairedFirmwareVersion}，两端必须同步更新。"
                 : "";
             DialogResult install = MessageBox.Show(
-                $"发现新版本 v{available.ToString(3)}，是否立即下载并安装？{compatibilityNotice}",
+                $"发现已签名版本 v{available}，是否立即下载并安装？{compatibilityNotice}",
                 "NEXUS Display 更新", MessageBoxButtons.YesNo,
-                manifest.PeerUpdateRequired ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+                payload.PeerUpdateRequired ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
             if (install != DialogResult.Yes) return false;
 
-            if (!Uri.TryCreate(manifest.DownloadUrl, UriKind.Absolute, out Uri? downloadUri) || downloadUri.Scheme != Uri.UriSchemeHttps)
-                throw new InvalidOperationException("更新包必须使用 HTTPS 地址");
-            if (string.IsNullOrWhiteSpace(manifest.Sha256) || manifest.Sha256.Length != 64)
-                throw new InvalidDataException("更新清单缺少有效的 SHA-256");
+            string updateDirectory = CreateUpdateDirectory();
+            string envelopePath = Path.Combine(updateDirectory, "update-envelope.json");
+            string packagePath = Path.Combine(updateDirectory, "update.zip");
+            File.WriteAllText(envelopePath, envelopeJson, new UTF8Encoding(false));
+            await DownloadPackageAsync(client, new Uri(payload.DownloadUrl), packagePath);
+            UpdateTrust.VerifyPackageHash(packagePath, payload);
 
-            string zipPath = Path.Combine(CreateUpdateDirectory(), "update.zip");
-            await DownloadAsync(client, downloadUri, zipPath);
-            VerifySha256(zipPath, manifest.Sha256);
-            return PrepareInstall(zipPath, available);
+            InstallationManager.EnsureUpdaterCopy();
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = InstallationManager.UpdaterExecutable,
+                UseShellExecute = true,
+                WorkingDirectory = InstallationManager.UpdaterDirectory
+            };
+            foreach (string argument in new[]
+            {
+                "--apply-update", "--parent-pid", Environment.ProcessId.ToString(),
+                "--package", packagePath, "--envelope", envelopePath
+            }) startInfo.ArgumentList.Add(argument);
+            if (Process.Start(startInfo) is null)
+                throw new InvalidOperationException("无法启动受保护的更新辅助程序");
+            AppLog.Info("UPDATE", $"prepared v{available}");
+            return true;
         }
         catch (Exception ex)
         {
@@ -66,134 +71,198 @@ internal static class UpdateManager
         }
     }
 
-    private static async Task<bool> SelectLocalPackageAsync()
+    public static int RunApplyMode(string[] arguments)
     {
-        DialogResult choose = MessageBox.Show(
-            "尚未配置在线更新源。是否选择本地新版 ZIP 并自动安装？",
-            "NEXUS Display 更新", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-        if (choose != DialogResult.Yes) return false;
-
-        using var dialog = new OpenFileDialog
+        string executable = Environment.ProcessPath ?? Application.ExecutablePath;
+        if (!Path.GetFullPath(executable).Equals(
+                Path.GetFullPath(InstallationManager.UpdaterExecutable),
+                StringComparison.OrdinalIgnoreCase))
         {
-            Title = "选择 NEXUS Display 更新包",
-            Filter = "NEXUS 更新包 (*.zip)|*.zip",
-            CheckFileExists = true,
-            Multiselect = false
-        };
-        if (dialog.ShowDialog() != DialogResult.OK) return false;
-        if (new FileInfo(dialog.FileName).Length > MaxPackageBytes)
-            throw new InvalidDataException("更新包超过 300 MB 限制");
-
-        string zipPath = Path.Combine(CreateUpdateDirectory(), "update.zip");
-        File.Copy(dialog.FileName, zipPath, true);
-        await Task.Yield();
-        return PrepareInstall(zipPath, null);
-    }
-
-    private static bool PrepareInstall(string zipPath, Version? expectedVersion)
-    {
-        string stage = Path.Combine(Path.GetDirectoryName(zipPath)!, "stage");
-        ZipFile.ExtractToDirectory(zipPath, stage, true);
-        string? payloadExe = Directory.EnumerateFiles(stage, "Nexus Display.exe", SearchOption.AllDirectories)
-            .FirstOrDefault();
-        if (payloadExe is null)
-            throw new InvalidDataException("更新包中找不到 Nexus Display.exe");
-
-        Version payloadVersion = ParseVersion(FileVersionInfo.GetVersionInfo(payloadExe).FileVersion ?? "0.0.0");
-        if (expectedVersion is not null && payloadVersion != expectedVersion)
-            throw new InvalidDataException("更新包版本与清单不一致");
-        if (payloadVersion <= BuildInfo.Current)
-        {
-            MessageBox.Show($"所选更新包为 v{payloadVersion.ToString(3)}，没有高于当前版本。",
-                "NEXUS Display 更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return false;
+            AppLog.Error("UPDATE", "apply mode rejected outside protected updater path");
+            return 2;
         }
 
-        string target = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
-        string scriptPath = Path.Combine(AppLog.DirectoryPath, $"apply-update-{Guid.NewGuid():N}.ps1");
-        File.WriteAllText(scriptPath, ApplyScript, new System.Text.UTF8Encoding(false));
+        string? packagePath = GetOption(arguments, "--package");
+        string? envelopePath = GetOption(arguments, "--envelope");
+        string? parentText = GetOption(arguments, "--parent-pid");
+        if (packagePath is null || envelopePath is null ||
+            !int.TryParse(parentText, out int parentProcessId) || parentProcessId <= 0)
+        {
+            AppLog.Error("UPDATE", "apply arguments invalid");
+            return 2;
+        }
 
+        string? incoming = null;
+        string? protectedPackage = null;
+        try
+        {
+            WaitForParent(parentProcessId);
+            string envelopeJson = File.ReadAllText(envelopePath, new UTF8Encoding(false, true));
+            UpdatePayload payload = UpdateTrust.VerifyEnvelope(envelopeJson);
+            ProductVersion version = ProductVersion.Parse(payload.Version);
+            if (version <= BuildInfo.Current)
+                throw new InvalidDataException("更新版本没有高于当前更新辅助程序版本");
+
+            protectedPackage = Path.Combine(InstallationManager.InstallRoot,
+                $"package-{Guid.NewGuid():N}.zip");
+            File.Copy(packagePath, protectedPackage, false);
+            UpdateTrust.VerifyPackageHash(protectedPackage, payload);
+            incoming = Path.Combine(InstallationManager.InstallRoot, $"incoming-{Guid.NewGuid():N}");
+            UpdateTrust.ExtractValidatedPackage(protectedPackage, incoming, version);
+            ApplyAtomicSwap(incoming, version);
+            incoming = null;
+            File.Delete(protectedPackage);
+            protectedPackage = null;
+            TryDeleteUpdateStaging(packagePath);
+            AppLog.Info("UPDATE", $"installed v{version}");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("UPDATE", ex);
+            if (incoming is not null) TryDeleteProtectedDirectory(incoming);
+            if (protectedPackage is not null)
+            {
+                try { File.Delete(protectedPackage); } catch { }
+            }
+            TryStartCurrentVersion();
+            return 1;
+        }
+    }
+
+    private static void ApplyAtomicSwap(string incoming, ProductVersion version)
+    {
+        string current = InstallationManager.CurrentDirectory;
+        string rollback = Path.Combine(InstallationManager.InstallRoot, "rollback");
+        if (!Directory.Exists(current)) throw new DirectoryNotFoundException("当前安装目录不存在");
+        if (Directory.Exists(rollback)) TryDeleteProtectedDirectory(rollback);
+
+        Directory.Move(current, rollback);
+        bool newCurrentPlaced = false;
+        try
+        {
+            Directory.Move(incoming, current);
+            newCurrentPlaced = true;
+            string executable = Path.Combine(current, InstallationManager.ExecutableName);
+            using Process child = StartInstalledProcess(executable, ["--background", "--post-update", version.ToString()]);
+            if (child.WaitForExit(2500))
+                throw new InvalidOperationException($"新版启动后立即退出，代码 {child.ExitCode}");
+        }
+        catch
+        {
+            if (newCurrentPlaced && Directory.Exists(current))
+            {
+                string failed = Path.Combine(InstallationManager.InstallRoot, $"failed-{Guid.NewGuid():N}");
+                Directory.Move(current, failed);
+                Directory.Move(rollback, current);
+                TryDeleteProtectedDirectory(failed);
+            }
+            else if (!Directory.Exists(current) && Directory.Exists(rollback))
+            {
+                Directory.Move(rollback, current);
+            }
+            TryStartCurrentVersion();
+            throw;
+        }
+    }
+
+    private static Process StartInstalledProcess(string executable, IEnumerable<string> arguments)
+    {
         var startInfo = new ProcessStartInfo
         {
-            FileName = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"),
-            UseShellExecute = false,
-            CreateNoWindow = true
+            FileName = executable,
+            UseShellExecute = true,
+            WorkingDirectory = Path.GetDirectoryName(executable)!
         };
-        startInfo.ArgumentList.Add("-NoProfile");
-        startInfo.ArgumentList.Add("-NonInteractive");
-        startInfo.ArgumentList.Add("-ExecutionPolicy");
-        startInfo.ArgumentList.Add("Bypass");
-        startInfo.ArgumentList.Add("-File");
-        startInfo.ArgumentList.Add(scriptPath);
-        startInfo.ArgumentList.Add(Environment.ProcessId.ToString());
-        startInfo.ArgumentList.Add(Path.GetDirectoryName(payloadExe)!);
-        startInfo.ArgumentList.Add(target);
-        using Process? helper = Process.Start(startInfo);
-        if (helper is null)
-            throw new InvalidOperationException("无法启动更新辅助程序");
-        AppLog.Info("UPDATE", $"apply v{payloadVersion.ToString(3)}");
-        return true;
+        foreach (string argument in arguments) startInfo.ArgumentList.Add(argument);
+        return Process.Start(startInfo) ?? throw new InvalidOperationException("无法启动更新后的程序");
     }
 
-    private static UpdateChannel? LoadUpdateChannel()
+    private static void TryStartCurrentVersion()
+    {
+        try
+        {
+            if (File.Exists(InstallationManager.CurrentExecutable))
+                StartInstalledProcess(InstallationManager.CurrentExecutable, ["--background"]);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("UPDATE", $"rollback launch failed: {AppLog.ExceptionSummary(ex)}");
+        }
+    }
+
+    private static void WaitForParent(int processId)
+    {
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            if (!process.WaitForExit(45_000)) throw new TimeoutException("旧版程序未在 45 秒内退出");
+        }
+        catch (ArgumentException)
+        {
+            // The parent exited before the updater opened its process handle.
+        }
+    }
+
+    private static Uri LoadManifestUri()
     {
         string configPath = Path.Combine(AppContext.BaseDirectory, "update-channel.json");
-        if (!File.Exists(configPath)) return null;
-        return JsonSerializer.Deserialize<UpdateChannel>(File.ReadAllText(configPath), JsonOptions);
-    }
-
-    private static void ValidateManifest(UpdateManifest manifest)
-    {
-        if (!manifest.Component.Equals("desktop", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("更新清单组件不是 desktop");
-        if (!manifest.Channel.Equals(BuildInfo.ReleaseChannel, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("更新清单通道与当前程序不匹配");
-        if (manifest.ProtocolMajor <= 0)
-            throw new InvalidDataException("更新清单缺少有效协议主版本");
-
-        Version version = ParseVersion(manifest.Version);
-        bool channelValid = BuildInfo.ReleaseChannel == "stable"
-            ? version.Build == 0
-            : version.Build is >= 1 and <= 9;
-        if (!channelValid)
-            throw new InvalidDataException("更新包版本不符合当前通道规则");
-        if (manifest.PeerUpdateRequired && string.IsNullOrWhiteSpace(manifest.PairedFirmwareVersion))
-            throw new InvalidDataException("协同更新清单缺少配套固件版本");
+        string configuredUrl = BuildInfo.OfficialManifestUrl;
+        if (File.Exists(configPath))
+        {
+            UpdateChannel channel = JsonSerializer.Deserialize<UpdateChannel>(
+                File.ReadAllText(configPath), JsonOptions) ?? throw new InvalidDataException("更新通道配置无效");
+            if (!channel.Channel.Equals(BuildInfo.ReleaseChannel, StringComparison.Ordinal) ||
+                !channel.ManifestUrl.Equals(BuildInfo.OfficialManifestUrl, StringComparison.Ordinal))
+                throw new InvalidDataException("更新通道配置不属于本版本的固定官方源");
+            configuredUrl = channel.ManifestUrl;
+        }
+        return new Uri(configuredUrl, UriKind.Absolute);
     }
 
     private static HttpClient CreateClient()
     {
-        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("NexusDisplay", BuildInfo.DisplayVersion));
+        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(45) };
+        client.DefaultRequestHeaders.UserAgent.Add(
+            new ProductInfoHeaderValue("NexusDisplay", BuildInfo.DisplayVersion));
         return client;
     }
 
-    private static async Task DownloadAsync(HttpClient client, Uri uri, string destination)
+    private static async Task<string> DownloadTextAsync(HttpClient client, Uri uri, int maximumBytes)
     {
         using HttpResponseMessage response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead);
         response.EnsureSuccessStatusCode();
-        if (response.Content.Headers.ContentLength is > MaxPackageBytes)
-            throw new InvalidDataException("更新包超过 300 MB 限制");
+        if (response.Content.Headers.ContentLength is long length && length > maximumBytes)
+            throw new InvalidDataException("更新清单过大");
+        await using Stream input = await response.Content.ReadAsStreamAsync();
+        using var output = new MemoryStream();
+        byte[] buffer = new byte[8192];
+        int count;
+        while ((count = await input.ReadAsync(buffer)) > 0)
+        {
+            if (output.Length > maximumBytes - count) throw new InvalidDataException("更新清单过大");
+            output.Write(buffer, 0, count);
+        }
+        return new UTF8Encoding(false, true).GetString(output.ToArray());
+    }
 
-        await using Stream source = await response.Content.ReadAsStreamAsync();
-        await using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None);
+    private static async Task DownloadPackageAsync(HttpClient client, Uri uri, string destination)
+    {
+        using HttpResponseMessage response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead);
+        response.EnsureSuccessStatusCode();
+        if (response.Content.Headers.ContentLength is > UpdateTrust.MaximumPackageBytes)
+            throw new InvalidDataException("更新包超过 300 MB 限制");
+        await using Stream input = await response.Content.ReadAsStreamAsync();
+        await using FileStream output = new(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         byte[] buffer = new byte[81920];
         long total = 0;
         int count;
-        while ((count = await source.ReadAsync(buffer)) > 0)
+        while ((count = await input.ReadAsync(buffer)) > 0)
         {
             total += count;
-            if (total > MaxPackageBytes) throw new InvalidDataException("更新包超过 300 MB 限制");
+            if (total > UpdateTrust.MaximumPackageBytes) throw new InvalidDataException("更新包超过 300 MB 限制");
             await output.WriteAsync(buffer.AsMemory(0, count));
         }
-    }
-
-    private static void VerifySha256(string path, string expected)
-    {
-        using FileStream stream = File.OpenRead(path);
-        string actual = Convert.ToHexString(SHA256.HashData(stream));
-        if (!actual.Equals(expected.Trim(), StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("更新包 SHA-256 校验失败");
     }
 
     private static string CreateUpdateDirectory()
@@ -212,49 +281,43 @@ internal static class UpdateManager
         return directory;
     }
 
-    private static Version ParseVersion(string value)
+    private static void TryDeleteUpdateStaging(string packagePath)
     {
-        string clean = value.Split(['+', '-'], 2)[0];
-        if (!Version.TryParse(clean, out Version? version))
-            throw new InvalidDataException($"无效版本号：{value}");
-        return new Version(version.Major, version.Minor, Math.Max(version.Build, 0));
+        try
+        {
+            string? directory = Path.GetDirectoryName(packagePath);
+            string updatesRoot = Path.GetFullPath(Path.Combine(AppLog.DirectoryPath, "updates"))
+                .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (directory is not null &&
+                (Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar)
+                .StartsWith(updatesRoot, StringComparison.OrdinalIgnoreCase))
+                Directory.Delete(directory, true);
+        }
+        catch { }
     }
 
-    private const string ApplyScript = """
-param([int]$ProcessId, [string]$Source, [string]$Target)
-$ErrorActionPreference = 'Stop'
-$log = Join-Path $env:LOCALAPPDATA 'NexusDisplay\NexusDisplay.log'
-try {
-    Wait-Process -Id $ProcessId -Timeout 30 -ErrorAction SilentlyContinue
-    Get-ChildItem -LiteralPath $Source -Force | ForEach-Object {
-        $destination = Join-Path $Target $_.Name
-        if ($_.Name -eq 'update-channel.json' -and (Test-Path -LiteralPath $destination)) { return }
-        Copy-Item -LiteralPath $_.FullName -Destination $destination -Recurse -Force
+    private static void TryDeleteProtectedDirectory(string path)
+    {
+        string root = Path.GetFullPath(InstallationManager.InstallRoot)
+            .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        string target = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!target.StartsWith(root, StringComparison.OrdinalIgnoreCase) || target.Equals(root, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("拒绝删除安装根目录以外的路径");
+        if (Directory.Exists(path)) Directory.Delete(path, true);
     }
-    Start-Process -FilePath (Join-Path $Target 'Nexus Display.exe') -ArgumentList '--background' -WindowStyle Hidden
-} catch {
-    Add-Content -LiteralPath $log -Value ("{0} ERR UPDATE apply failed: {1}" -f (Get-Date -Format 'MM-dd HH:mm:ss'), $_.Exception.Message)
-}
-Remove-Item -LiteralPath $Source -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
-""";
+
+    private static string? GetOption(string[] arguments, string name)
+    {
+        for (int index = 0; index < arguments.Length - 1; index++)
+        {
+            if (arguments[index].Equals(name, StringComparison.OrdinalIgnoreCase)) return arguments[index + 1];
+        }
+        return null;
+    }
 
     private sealed class UpdateChannel
     {
-        public string? ManifestUrl { get; init; }
         public string Channel { get; init; } = "";
-    }
-
-    private sealed class UpdateManifest
-    {
-        public string Component { get; init; } = "";
-        public string Channel { get; init; } = "";
-        public string Version { get; init; } = "";
-        public string DownloadUrl { get; init; } = "";
-        public string Sha256 { get; init; } = "";
-        public int ProtocolMajor { get; init; }
-        public string UpdateClass { get; init; } = "";
-        public bool PeerUpdateRequired { get; init; }
-        public string? PairedFirmwareVersion { get; init; }
+        public string ManifestUrl { get; init; } = "";
     }
 }

@@ -21,7 +21,9 @@
 
 请通过 GitHub Security Advisory 的私密报告功能提交潜在漏洞。报告应包含受影响版本、复现条件、实际影响与最小复现材料。请勿在公开 Issue、日志或截图中提交访问令牌、用户名、主机名、串口设备实例路径、硬件序列号或其他可识别信息。
 
-更新功能仅接受 HTTPS 清单和下载地址，并对在线 ZIP 执行 SHA-256 校验。正式更新清单仍应由受保护分支和受控 GitHub Release 提供。
+更新功能只读取源码固定的官方 HTTPS 清单地址。清单载荷必须通过应用内置 ECDSA P-256 公钥验签，下载 URL 必须属于本仓库 GitHub Release，ZIP 必须匹配签名载荷中的 SHA-256；更新辅助程序还会从受保护目录重新校验、限制解压路径并保留一份回滚。私钥仅由维护者离线保管，严禁进入源码、日志或发布包。
+
+该项目级签名保护自动更新身份，但不等同于商业 Windows Authenticode 证书及其信誉。发布脚本支持维护者提供证书时附加 Authenticode；未签名的开发版可执行文件可能显示“未知发布者”。首次安装者仍应从本仓库官方 Release 获取文件并核对 `SHA256SUMS.txt`。
 
 ## English
 
@@ -41,4 +43,6 @@ To the maximum extent permitted by applicable law, the maintainer is not liable 
 
 Use GitHub Security Advisories to report potential vulnerabilities privately. Include the affected version, reproduction conditions, observed impact, and a minimal reproducer. Do not place access tokens, user names, host names, serial-device instance paths, hardware serial numbers, or other identifying information in public issues, logs, or screenshots.
 
-The updater accepts only HTTPS manifests and download URLs and verifies the SHA-256 digest of downloaded ZIP archives. Stable update manifests should remain on a protected branch and refer to controlled GitHub Release assets.
+The updater reads only the source-pinned official HTTPS manifest location. The payload must verify against the embedded ECDSA P-256 public key, the download URL must belong to this repository's GitHub Releases, and the ZIP must match the signed SHA-256 digest. A helper revalidates from the protected install root, constrains extraction paths, and retains one rollback. The maintainer keeps the private key offline; it must never enter source, logs, or release packages.
+
+This project signature protects automatic-update identity but is not equivalent to commercial Windows Authenticode certification or reputation. The release script can add Authenticode when a maintainer supplies a certificate; an unsigned development executable may show “Unknown publisher.” First-time installers should obtain files from this repository's official Release and verify `SHA256SUMS.txt`.

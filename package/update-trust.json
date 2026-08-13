@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "keyId": "nexus-dev-2026-01",
+  "algorithm": "ECDSA_P256_SHA256_DER",
+  "publicKeySpkiBase64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEc4RE/HiHi9E/NRgE6G9Ze/TEf6CNQlT2r+lDBcN95k++Xq9mNdi+TtCTCpS9R5EG65/YT05O7WguwIp2oGuCAQ=="
+}

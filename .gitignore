@@ -1,6 +1,8 @@
 # .NET generated state
 /bin/
 /obj/
+**/bin/
+**/obj/
 /artifacts/
 
 # Restored third-party binaries

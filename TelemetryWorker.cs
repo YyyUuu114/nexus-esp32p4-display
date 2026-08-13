@@ -4,6 +4,7 @@ using System.IO.Ports;
 using System.Management;
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LibreHardwareMonitor.Hardware;
@@ -14,20 +15,23 @@ internal readonly record struct AgentStatus(bool Connected, string? Port, string
 
 internal sealed class TelemetryWorker : IDisposable
 {
+    private const string EspressifUsbSerialIdentity = "VID_303A&PID_1001";
     private readonly CancellationTokenSource _stop = new();
     private readonly Computer _computer;
     private readonly IHardware[] _hardware;
     private readonly IHardware? _cpu;
     private readonly IHardware[] _gpus;
+    private readonly IHardware? _primaryGpu;
+    private readonly EnergyAccumulator _energy = new();
     private Task? _task;
     private SerialPort? _serial;
     private string? _port;
+    private string? _sessionNonce;
+    private ProductVersion? _firmwareVersion;
+    private string? _lastVerifiedPort;
     private uint _sequence;
     private volatile bool _reconnectRequested;
     private NetworkCounter? _networkPrevious;
-    private long? _lastEnergySampleTimestamp;
-    private double? _lastCombinedPowerWatts;
-    private double _sessionEnergyKwh;
     private bool _disposed;
 
     public event Action<AgentStatus>? StatusChanged;
@@ -44,8 +48,13 @@ internal sealed class TelemetryWorker : IDisposable
         };
         _computer.Open();
         _hardware = Flatten(_computer.Hardware).ToArray();
-        _cpu = _hardware.FirstOrDefault(h => h.HardwareType == HardwareType.Cpu);
-        _gpus = _hardware.Where(h => h.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel).ToArray();
+        _cpu = _hardware.FirstOrDefault(hardware => hardware.HardwareType == HardwareType.Cpu);
+        _gpus = _hardware.Where(hardware => hardware.HardwareType is
+            HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel).ToArray();
+        _primaryGpu = _gpus
+            .OrderBy(hardware => hardware.HardwareType == HardwareType.GpuIntel ? 1 : 0)
+            .ThenBy(hardware => hardware.Name, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
     }
 
     public void Start() => _task = Task.Run(() => RunAsync(_stop.Token));
@@ -58,6 +67,7 @@ internal sealed class TelemetryWorker : IDisposable
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
+        long nextScanTimestamp = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -66,33 +76,29 @@ internal sealed class TelemetryWorker : IDisposable
                 {
                     _reconnectRequested = false;
                     CloseSerial();
+                    nextScanTimestamp = 0;
                 }
 
-                // Sampling is deliberately independent of the USB connection. Energy
-                // belongs to this app process lifetime and survives board disconnects.
-                TelemetryFrame frame = ReadFrame();
-
-                if (_serial is null || !_serial.IsOpen)
+                TelemetrySnapshot snapshot = ReadSnapshot();
+                long now = Stopwatch.GetTimestamp();
+                if (_serial is null && now >= nextScanTimestamp)
                 {
-                    _port = FindEspPort();
-                    if (_port is null)
-                    {
-                        StatusChanged?.Invoke(new AgentStatus(false, null, "等待开发板"));
-                        await Task.Delay(3000, cancellationToken);
-                        continue;
-                    }
-
-                    OpenSerial(_port);
-                    AppLog.Info("USB", $"connected {_port}");
-                    StatusChanged?.Invoke(new AgentStatus(true, _port, $"已连接 {_port}"));
-                    await Task.Delay(1200, cancellationToken);
+                    TryConnect();
+                    nextScanTimestamp = now + 3 * Stopwatch.Frequency;
                 }
 
-                string json = JsonSerializer.Serialize(frame);
-                _serial!.Write(json);
-                _serial.Write("\n");
-                StatusChanged?.Invoke(new AgentStatus(true, _port,
-                    $"实时发送 · CPU {Format(frame.cpu_load)}% · GPU {Format(frame.gpu_load)}%"));
+                if (_serial is not null && _sessionNonce is not null)
+                {
+                    TelemetryFrame frame = snapshot.ToFrame(_sequence++, _sessionNonce);
+                    _serial.WriteLine(JsonSerializer.Serialize(frame));
+                    StatusChanged?.Invoke(new AgentStatus(true, _port,
+                        $"实时发送 · CPU {Format(frame.cpu_load)}% · GPU {Format(frame.gpu_load)}%"));
+                }
+                else
+                {
+                    StatusChanged?.Invoke(new AgentStatus(false, null, "等待兼容开发板"));
+                }
+
                 await Task.Delay(1000, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -104,103 +110,191 @@ internal sealed class TelemetryWorker : IDisposable
                 AppLog.Error("USB", ex, "usb-loop");
                 StatusChanged?.Invoke(new AgentStatus(false, _port, "连接中断，自动重试"));
                 CloseSerial();
-                try { await Task.Delay(2500, cancellationToken); } catch (OperationCanceledException) { break; }
+                try { await Task.Delay(1500, cancellationToken); }
+                catch (OperationCanceledException) { break; }
             }
         }
     }
 
-    private TelemetryFrame ReadFrame()
+    private void TryConnect()
+    {
+        foreach (string candidate in FindCandidatePorts())
+        {
+            SerialPort? serial = null;
+            try
+            {
+                serial = CreateSerialPort(candidate);
+                serial.Open();
+                serial.DiscardInBuffer();
+                serial.DiscardOutBuffer();
+
+                string nonce = ProtocolHandshake.CreateNonce();
+                serial.WriteLine(ProtocolHandshake.CreateHello(nonce));
+                string response = ReadProtocolLine(serial, TimeSpan.FromMilliseconds(1500));
+                FirmwareIdentity identity = ProtocolHandshake.ValidateReady(response, nonce);
+
+                _serial = serial;
+                serial = null;
+                _port = candidate;
+                _lastVerifiedPort = candidate;
+                _sessionNonce = identity.Nonce;
+                _firmwareVersion = identity.Version;
+                AppLog.Info("USB", $"ready {candidate} fw={identity.Version} proto={BuildInfo.ProtocolVersion}");
+                StatusChanged?.Invoke(new AgentStatus(true, candidate,
+                    $"已连接 {candidate} · 固件 v{identity.Version}"));
+                return;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or
+                                              TimeoutException or InvalidDataException or InvalidOperationException)
+            {
+                AppLog.Warn("PORT", $"reject {candidate}: {AppLog.ExceptionSummary(ex)}",
+                    $"port-reject-{candidate}", TimeSpan.FromMinutes(10));
+            }
+            finally
+            {
+                if (serial is not null)
+                {
+                    try { if (serial.IsOpen) serial.Close(); } catch { }
+                    serial.Dispose();
+                }
+            }
+        }
+    }
+
+    private TelemetrySnapshot ReadSnapshot()
     {
         foreach (IHardware item in _hardware)
         {
             try { item.Update(); } catch { }
         }
 
-        IHardware? gpu = SelectPrimaryGpu();
-        MemoryStatus memory = GetMemoryStatus();
+        MemoryStatus? memory = GetMemoryStatus();
         (double? down, double? up) = GetNetworkRates();
-        float? fan = GetPreferred(_hardware, SensorType.Fan, ["CPU", "Pump", "Chassis", "System"], true);
-        double? cpuLoad = Metric(GetPreferred(_cpu is null ? [] : [_cpu], SensorType.Load, ["^CPU Total$", "^CPU Core Max$", "Total"], true));
-        double? cpuTemp = Positive(GetPreferred(_cpu is null ? [] : [_cpu], SensorType.Temperature, ["^CPU Package$", "Tctl/Tdie", "Core Average", "Core Max"], true));
-        double? cpuPower = Positive(GetPreferred(_cpu is null ? [] : [_cpu], SensorType.Power, ["^CPU Package$", "Package", "Cores"], true));
-        double? gpuLoad = Metric(GetPreferred(gpu is null ? [] : [gpu], SensorType.Load, ["^GPU Core$", "^D3D 3D$", "GPU"], true));
-        double? gpuTemp = Positive(GetPreferred(gpu is null ? [] : [gpu], SensorType.Temperature, ["^GPU Core$", "GPU Hot Spot", "GPU"], true));
-        double? gpuPower = Metric(GetPreferred(gpu is null ? [] : [gpu], SensorType.Power, ["^GPU Board Power$", "^GPU Package$", "^GPU Power$", "Board", "Package"], true));
+        double? cpuLoad = Bounded(GetPreferred(_cpu is null ? [] : [_cpu], SensorType.Load,
+            ["^CPU Total$", "^CPU Core Max$", "Total"], true), 0.0, 100.0);
+        double? cpuTemp = Bounded(GetPreferred(_cpu is null ? [] : [_cpu], SensorType.Temperature,
+            ["^CPU Package$", "Tctl/Tdie", "Core Average", "Core Max"], true), 0.0, 250.0);
+        double? cpuPower = Bounded(GetPreferred(_cpu is null ? [] : [_cpu], SensorType.Power,
+            ["^CPU Package$", "Package", "Cores"], true), 0.0, 5000.0);
+        double? gpuLoad = Bounded(GetPreferred(_primaryGpu is null ? [] : [_primaryGpu], SensorType.Load,
+            ["^GPU Core$", "^D3D 3D$", "GPU"], true), 0.0, 100.0);
+        double? gpuTemp = Bounded(GetPreferred(_primaryGpu is null ? [] : [_primaryGpu], SensorType.Temperature,
+            ["^GPU Core$", "GPU Hot Spot", "GPU"], true), 0.0, 250.0);
+        double? gpuPower = Bounded(GetPreferred(_primaryGpu is null ? [] : [_primaryGpu], SensorType.Power,
+            ["^GPU Board Power$", "^GPU Package$", "^GPU Power$", "Board", "Package"], true),
+            0.0, 5000.0);
 
-        UpdateSessionEnergy(cpuPower, gpuPower);
+        double? allGpuPower = SumAvailable(_gpus.Select(gpu =>
+            Bounded(GetPreferred([gpu], SensorType.Power,
+                ["^GPU Board Power$", "^GPU Package$", "^GPU Power$", "Board", "Package"], true),
+                0.0, 5000.0)));
+        double? combinedPower = SumAvailable([cpuPower, allGpuPower]);
+        _energy.AddSample(Stopwatch.GetTimestamp(), Stopwatch.Frequency, combinedPower);
 
-        return new TelemetryFrame
-        {
-            v = BuildInfo.ProtocolMajor,
-            seq = _sequence++,
-            ts_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            host = Environment.MachineName.ToUpperInvariant(),
-            date = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            clock = DateTime.Now.ToString("HH:mm", CultureInfo.InvariantCulture),
-            cpu_load = cpuLoad,
-            cpu_temp = cpuTemp,
-            cpu_power = cpuPower,
-            gpu_load = gpuLoad,
-            gpu_temp = gpuTemp,
-            gpu_power = gpuPower,
-            session_energy_kwh = Math.Round(_sessionEnergyKwh, 6, MidpointRounding.AwayFromZero),
-            memory_used_gb = Round(memory.UsedGiB),
-            memory_total_gb = Round(memory.TotalGiB),
-            net_down_mbps = Round(down),
-            net_up_mbps = Round(up),
-            fan_rpm = Round(fan, 0)
-        };
+        double? fan = Bounded(GetPreferred(_hardware, SensorType.Fan,
+            ["CPU", "Pump", "Chassis", "System"], true), 0.0, 1_000_000.0);
+        return new TelemetrySnapshot(
+            SanitizeHost(Environment.MachineName),
+            cpuLoad, cpuTemp, cpuPower,
+            gpuLoad, gpuTemp, gpuPower,
+            Math.Min(_energy.KilowattHours, 1_000_000.0),
+            memory?.UsedGiB, memory?.TotalGiB,
+            ClampNullable(down, 0.0, 10_000_000.0),
+            ClampNullable(up, 0.0, 10_000_000.0),
+            fan);
     }
 
-    private void UpdateSessionEnergy(double? cpuPower, double? gpuPower)
+    private IEnumerable<string> FindCandidatePorts()
     {
-        long now = Stopwatch.GetTimestamp();
-        double? combinedPower = cpuPower.HasValue || gpuPower.HasValue
-            ? (cpuPower ?? 0.0) + (gpuPower ?? 0.0)
-            : null;
+        string[] available = SerialPort.GetPortNames()
+            .Select(port => port.ToUpperInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(port => port, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (available.Length == 0) return [];
 
-        if (_lastEnergySampleTimestamp.HasValue && _lastCombinedPowerWatts.HasValue && combinedPower.HasValue)
+        var preferred = new List<string>();
+        if (_lastVerifiedPort is not null && available.Contains(_lastVerifiedPort, StringComparer.OrdinalIgnoreCase))
+            preferred.Add(_lastVerifiedPort);
+
+        try
         {
-            double elapsedSeconds = (now - _lastEnergySampleTimestamp.Value) / (double)Stopwatch.Frequency;
-            // Ignore suspend/hibernate-sized gaps; sensor endpoints cannot represent them.
-            if (elapsedSeconds > 0.0 && elapsedSeconds <= 10.0)
+            using var searcher = new ManagementObjectSearcher(
+                "SELECT Name, PNPDeviceID FROM Win32_PnPEntity WHERE Name LIKE '%(COM%' ");
+            foreach (ManagementObject device in searcher.Get())
             {
-                double averageWatts = (_lastCombinedPowerWatts.Value + combinedPower.Value) / 2.0;
-                _sessionEnergyKwh += averageWatts * elapsedSeconds / 3_600_000.0;
+                string name = device["Name"]?.ToString() ?? "";
+                string id = device["PNPDeviceID"]?.ToString() ?? "";
+                if (!id.Contains(EspressifUsbSerialIdentity, StringComparison.OrdinalIgnoreCase)) continue;
+                Match match = Regex.Match(name, @"\((COM\d+)\)", RegexOptions.IgnoreCase);
+                if (match.Success) preferred.Add(match.Groups[1].Value.ToUpperInvariant());
+            }
+            return preferred.Where(port => available.Contains(port, StringComparer.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn("PORT", AppLog.ExceptionSummary(ex), "port-wmi", TimeSpan.FromMinutes(10));
+            return preferred.Concat(available).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+    }
+
+    private static SerialPort CreateSerialPort(string port) => new(port, 115200, Parity.None, 8, StopBits.One)
+    {
+        Encoding = new UTF8Encoding(false, true),
+        DtrEnable = false,
+        RtsEnable = false,
+        NewLine = "\n",
+        ReadTimeout = 200,
+        WriteTimeout = 700,
+        ReadBufferSize = 4096,
+        WriteBufferSize = 1024
+    };
+
+    private static string ReadProtocolLine(SerialPort serial, TimeSpan timeout)
+    {
+        long deadline = Stopwatch.GetTimestamp() + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+        var bytes = new List<byte>(256);
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            try
+            {
+                int value = serial.ReadByte();
+                if (value < 0) continue;
+                if (value == '\n')
+                {
+                    if (bytes.Count > 0 && bytes[^1] == '\r') bytes.RemoveAt(bytes.Count - 1);
+                    if (bytes.Count == 0 || bytes.Contains((byte)'\r'))
+                        throw new InvalidDataException("握手响应行结束无效");
+                    return new UTF8Encoding(false, true).GetString(bytes.ToArray());
+                }
+                if (bytes.Count >= 1024) throw new InvalidDataException("握手响应超过 1024 字节");
+                bytes.Add((byte)value);
+            }
+            catch (TimeoutException)
+            {
+                // A short serial timeout keeps the overall handshake deadline bounded.
             }
         }
-
-        _lastEnergySampleTimestamp = now;
-        _lastCombinedPowerWatts = combinedPower;
+        throw new TimeoutException("开发板握手超时");
     }
 
-    private IHardware? SelectPrimaryGpu()
+    private static float? GetPreferred(IEnumerable<IHardware> hardware, SensorType type,
+                                       string[] patterns, bool maximumFallback)
     {
-        return _gpus
-            .Select(g => new
-            {
-                Hardware = g,
-                Integrated = g.HardwareType == HardwareType.GpuIntel ? 1 : 0,
-                Load = GetPreferred([g], SensorType.Load, ["^GPU Core$", "^D3D 3D$", "GPU"], true) ?? -1
-            })
-            .OrderBy(x => x.Integrated)
-            .ThenByDescending(x => x.Load)
-            .Select(x => x.Hardware)
-            .FirstOrDefault();
-    }
-
-    private static float? GetPreferred(IEnumerable<IHardware> hardware, SensorType type, string[] patterns, bool maximumFallback)
-    {
-        var candidates = hardware.SelectMany(h => h.Sensors)
-            .Where(s => s.SensorType == type && s.Value.HasValue && float.IsFinite(s.Value.Value))
+        ISensor[] candidates = hardware.SelectMany(item => item.Sensors)
+            .Where(sensor => sensor.SensorType == type && sensor.Value.HasValue &&
+                             float.IsFinite(sensor.Value.Value))
             .ToArray();
         foreach (string pattern in patterns)
         {
-            ISensor? match = candidates.FirstOrDefault(s => Regex.IsMatch(s.Name, pattern, RegexOptions.IgnoreCase));
+            ISensor? match = candidates.FirstOrDefault(sensor =>
+                Regex.IsMatch(sensor.Name, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
             if (match?.Value is float value) return value;
         }
         if (candidates.Length == 0) return null;
-        return maximumFallback ? candidates.Max(s => s.Value!.Value) : candidates[0].Value;
+        return maximumFallback ? candidates.Max(sensor => sensor.Value!.Value) : candidates[0].Value;
     }
 
     private static IEnumerable<IHardware> Flatten(IEnumerable<IHardware> roots)
@@ -208,65 +302,24 @@ internal sealed class TelemetryWorker : IDisposable
         foreach (IHardware root in roots)
         {
             yield return root;
-            foreach (IHardware child in Flatten(root.SubHardware))
-                yield return child;
+            foreach (IHardware child in Flatten(root.SubHardware)) yield return child;
         }
     }
 
-    private void OpenSerial(string port)
-    {
-        _serial = new SerialPort(port, 115200, Parity.None, 8, StopBits.One)
-        {
-            Encoding = new System.Text.UTF8Encoding(false),
-            DtrEnable = false,
-            RtsEnable = false,
-            WriteTimeout = 700
-        };
-        _serial.Open();
-    }
-
-    private static string? FindEspPort()
-    {
-        try
-        {
-            using var searcher = new ManagementObjectSearcher(
-                "SELECT Name, PNPDeviceID FROM Win32_PnPEntity WHERE Name LIKE '%(COM%' ");
-            string? fallback = null;
-            foreach (ManagementObject device in searcher.Get())
-            {
-                string name = device["Name"]?.ToString() ?? "";
-                string id = device["PNPDeviceID"]?.ToString() ?? "";
-                Match match = Regex.Match(name, @"\((COM\d+)\)", RegexOptions.IgnoreCase);
-                if (!match.Success) continue;
-                string port = match.Groups[1].Value.ToUpperInvariant();
-                fallback ??= port;
-                if (id.Contains("VID_303A&PID_1001", StringComparison.OrdinalIgnoreCase))
-                    return port;
-            }
-
-            string[] ports = SerialPort.GetPortNames().OrderBy(p => p).ToArray();
-            if (ports.Length == 1) return ports[0];
-            return fallback is not null && ports.Length == 1 ? fallback : null;
-        }
-        catch (Exception ex)
-        {
-            AppLog.Warn("PORT", AppLog.ExceptionSummary(ex), "port-scan", TimeSpan.FromMinutes(10));
-            string[] ports = SerialPort.GetPortNames();
-            return ports.Length == 1 ? ports[0] : null;
-        }
-    }
-
-    private static MemoryStatus GetMemoryStatus()
+    private static MemoryStatus? GetMemoryStatus()
     {
         var status = new MemoryStatusEx();
-        if (!GlobalMemoryStatusEx(status)) return default;
+        if (!GlobalMemoryStatusEx(status) || status.TotalPhysical == 0) return null;
         const double gib = 1024d * 1024d * 1024d;
-        return new MemoryStatus((status.TotalPhysical - status.AvailablePhysical) / gib, status.TotalPhysical / gib);
+        return new MemoryStatus(
+            Math.Round((status.TotalPhysical - status.AvailablePhysical) / gib, 1),
+            Math.Round(status.TotalPhysical / gib, 1));
     }
 
     private (double? Down, double? Up) GetNetworkRates()
     {
-        ulong received = 0, sent = 0;
+        ulong received = 0;
+        ulong sent = 0;
         foreach (NetworkInterface adapter in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (adapter.OperationalStatus != OperationalStatus.Up ||
@@ -274,14 +327,14 @@ internal sealed class TelemetryWorker : IDisposable
                 continue;
             try
             {
-                IPv4InterfaceStatistics stats = adapter.GetIPv4Statistics();
-                received += (ulong)stats.BytesReceived;
-                sent += (ulong)stats.BytesSent;
+                IPv4InterfaceStatistics statistics = adapter.GetIPv4Statistics();
+                received += (ulong)statistics.BytesReceived;
+                sent += (ulong)statistics.BytesSent;
             }
             catch { }
         }
 
-        var now = Stopwatch.GetTimestamp();
+        long now = Stopwatch.GetTimestamp();
         var current = new NetworkCounter(received, sent, now);
         if (_networkPrevious is not NetworkCounter previous)
         {
@@ -295,16 +348,49 @@ internal sealed class TelemetryWorker : IDisposable
                 (sent - previous.Sent) * 8d / seconds / 1_000_000d);
     }
 
-    private static double? Metric(float? value) => value.HasValue && float.IsFinite(value.Value) ? Math.Round(value.Value, 1) : null;
-    private static double? Positive(float? value) => value is > 0 && float.IsFinite(value.Value) ? Math.Round(value.Value, 1) : null;
-    private static double? Round(double? value, int digits = 1) => value.HasValue && double.IsFinite(value.Value) ? Math.Round(value.Value, digits) : null;
-    private static string Format(double? value) => value?.ToString("0", CultureInfo.InvariantCulture) ?? "--";
+    private static double? Bounded(float? value, double minimum, double maximum) =>
+        value.HasValue && float.IsFinite(value.Value) && value.Value >= minimum && value.Value <= maximum
+            ? Math.Round(value.Value, 1)
+            : null;
+
+    private static double? ClampNullable(double? value, double minimum, double maximum) =>
+        value.HasValue && double.IsFinite(value.Value) && value.Value >= minimum && value.Value <= maximum
+            ? Math.Round(value.Value, 1)
+            : null;
+
+    private static double? SumAvailable(IEnumerable<double?> values)
+    {
+        double sum = 0.0;
+        bool found = false;
+        foreach (double? value in values)
+        {
+            if (!value.HasValue || !double.IsFinite(value.Value) || value.Value < 0.0) continue;
+            sum += value.Value;
+            found = true;
+        }
+        return found && double.IsFinite(sum) ? sum : null;
+    }
+
+    private static string SanitizeHost(string input)
+    {
+        string result = new(input.ToUpperInvariant()
+            .Where(character => character is >= 'A' and <= 'Z' or >= '0' and <= '9' or '-' or '_')
+            .Take(15)
+            .ToArray());
+        return result.Length == 0 ? "DESKTOP" : result;
+    }
+
+    private static string Format(double? value) =>
+        value?.ToString("0", CultureInfo.InvariantCulture) ?? "--";
 
     private void CloseSerial()
     {
         try { if (_serial?.IsOpen == true) _serial.Close(); } catch { }
         _serial?.Dispose();
         _serial = null;
+        _sessionNonce = null;
+        _firmwareVersion = null;
+        _port = null;
     }
 
     public void Dispose()
@@ -340,11 +426,53 @@ internal sealed class TelemetryWorker : IDisposable
     private readonly record struct NetworkCounter(ulong Received, ulong Sent, long Timestamp);
 }
 
+internal readonly record struct TelemetrySnapshot(
+    string Host,
+    double? CpuLoad,
+    double? CpuTemp,
+    double? CpuPower,
+    double? GpuLoad,
+    double? GpuTemp,
+    double? GpuPower,
+    double SessionEnergyKwh,
+    double? MemoryUsedGiB,
+    double? MemoryTotalGiB,
+    double? NetDownMbps,
+    double? NetUpMbps,
+    double? FanRpm)
+{
+    public TelemetryFrame ToFrame(uint sequence, string sessionNonce)
+    {
+        DateTime now = DateTime.Now;
+        return new TelemetryFrame
+        {
+            v = BuildInfo.ProtocolMajor,
+            seq = sequence,
+            session_nonce = sessionNonce,
+            host = Host,
+            date = now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            clock = now.ToString("HH:mm", CultureInfo.InvariantCulture),
+            cpu_load = CpuLoad,
+            cpu_temp = CpuTemp,
+            cpu_power = CpuPower,
+            gpu_load = GpuLoad,
+            gpu_temp = GpuTemp,
+            gpu_power = GpuPower,
+            session_energy_kwh = Math.Round(SessionEnergyKwh, 6, MidpointRounding.AwayFromZero),
+            memory_used_gb = MemoryUsedGiB,
+            memory_total_gb = MemoryTotalGiB,
+            net_down_mbps = NetDownMbps,
+            net_up_mbps = NetUpMbps,
+            fan_rpm = FanRpm
+        };
+    }
+}
+
 internal sealed class TelemetryFrame
 {
     public int v { get; init; }
     public uint seq { get; init; }
-    public long ts_ms { get; init; }
+    public string session_nonce { get; init; } = "";
     public string host { get; init; } = "";
     public string date { get; init; } = "";
     public string clock { get; init; } = "";

@@ -1,23 +1,27 @@
 # Desktop Architecture
 
-## Process model
+## Process and privilege model
 
-NEXUS Display is a single WinForms tray process. A global named mutex prevents duplicate instances. The telemetry worker owns one LibreHardwareMonitor `Computer` object, one background task, and at most one serial port handle.
+The distribution is a self-contained WinForms tray executable with a global single-instance mutex. First launch from an extracted package copies the executable and fixed update configuration into `C:\Program Files\NEXUS Display\current`, then relaunches from that protected path. Administrator elevation supports protected installation and hardware sensors.
 
-## Sampling and transport
+Optional login startup is a Windows Scheduled Task created only after explicit user action. Its action must resolve exactly to the protected current executable with `--background`; querying the task also verifies this command. Installation itself leaves startup disabled.
 
-Each iteration updates the enabled CPU, GPU, motherboard, controller, and power-monitor hardware nodes, selects preferred sensors by stable name patterns, reads operating-system memory and network counters, serializes one JSON frame, and waits one second. Missing or invalid sensor values remain JSON `null`.
+## Sampling and energy
 
-Network throughput is derived from cumulative interface byte counters. Session energy uses trapezoidal integration of the available CPU and GPU power values. Elapsed gaps greater than ten seconds are excluded because suspend and hibernate intervals cannot be represented by the sensor endpoints.
+One background worker owns one LibreHardwareMonitor `Computer`, one serial handle, and the enabled hardware graph. Hardware and network counters update once per second. The displayed primary GPU is chosen deterministically once instead of switching with instantaneous load.
 
-USB discovery and reconnect run in the same worker. Disconnected scans occur every three seconds; connection failures use a 2.5-second retry delay. No busy loop is used.
+Session energy integrates non-negative finite CPU power plus one preferred board/package-power sensor from every GPU. Invalid, negative, or combined readings above 20 kW are discarded. Gaps over ten seconds are excluded, and increments are constrained to be non-negative, so cumulative energy is monotonic for the process lifetime. Serial disconnection does not reset it.
+
+## Transport
+
+Candidate selection, handshake, and retry behavior are documented in [SERIAL_DISCOVERY.md](SERIAL_DISCOVERY.md). A port is connected only after protocol-2.0 mutual version and nonce validation. JSON telemetry is sent once per second with bounded values and a sanitized 15-character ASCII host label.
 
 ## Persistent state
 
-The application stores no telemetry history. The only persistent application data is short diagnostic logging under `%LOCALAPPDATA%\NexusDisplay`, temporary update staging, and an optional Windows Scheduled Task named `Nexus Display Hardware Monitor`.
+No telemetry history is written. `%LOCALAPPDATA%\NexusDisplay` contains short logs and temporary downloaded update material. Logs rotate at 256 KiB, retain two historical files, and delete files older than seven days. Update staging older than two days is removed during later update checks.
 
-The scheduled task is created only after explicit user action and can be removed by the tray menu, command-line maintenance option, or packaged cancellation script.
+Protected application state is limited to `current`, `updater`, and at most one `rollback` directory under Program Files. The application does not create startup state unless requested.
 
 ## Network behavior
 
-Normal telemetry operation does not require Internet access. Network access occurs only when the user invokes update checking and the packaged HTTPS manifest URL is configured. Online packages are size-limited and must match the manifest SHA-256.
+Normal telemetry operation is offline. Network access occurs only when the user invokes update checking. The manifest origin is compile-time pinned; update identity, package hash, extraction, and rollback controls are described in [UPDATE_FORMAT.md](UPDATE_FORMAT.md).

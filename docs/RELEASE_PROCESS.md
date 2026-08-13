@@ -9,8 +9,9 @@ This repository is a publication surface, not the active development workspace. 
 3. Normalize version and protocol metadata across source, documentation, update manifests, and machine-readable release files.
 4. Review every third-party dependency for an official source, pinned version or bounded range, integrity hash, and applicable license.
 5. Scan the complete candidate tree for credentials, tokens, user-profile paths, host names, fixed serial ports, device identifiers, and oversized files.
-6. Build from the staged source. Generate SHA-256 digests for every release asset.
-7. Commit only the audited snapshot to the component branch. Attach binaries to a GitHub Release; do not commit them to branch history.
-8. Verify the public branch list, default branch, release assets, checksums, and rendered documentation after push.
+6. Build from the staged source with the repository-external ECDSA key. Decode and review the signed payload, verify that its URL, protocol, peer requirement, version range, and package SHA-256 match `release.json` and the exact ZIP.
+7. Copy only the reviewed signed envelope to `package/latest-update.json`; never copy the private key, restored dependencies, or executable artifacts into source.
+8. Commit and push the audited snapshot to the component development branch first. Only after the branch is public, create the declared GitHub prerelease and upload the exact ZIP, envelope, and checksum file; do not commit binaries to branch history.
+9. Verify the branch, workflow result, prerelease flag, asset hashes, signed envelope fetched through the pinned raw URL, and rendered documentation.
 
 Stable publication requires a `.0` product version and completed host validation. Development publication requires a `.1` through `.9` product version and must be identified as pre-release material in both README and `release.json`.

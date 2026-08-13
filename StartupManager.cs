@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Xml.Linq;
 
 namespace NexusDisplay;
 
@@ -6,29 +7,56 @@ internal static class StartupManager
 {
     private const string TaskName = "Nexus Display Hardware Monitor";
 
-    public static bool IsEnabled() => Run("/Query", "/TN", TaskName) == 0;
+    public static bool IsEnabled()
+    {
+        ProcessResult result = Run("/Query", "/TN", TaskName, "/XML");
+        if (result.ExitCode != 0) return false;
+        try
+        {
+            XDocument document = XDocument.Parse(result.StandardOutput, LoadOptions.None);
+            string? command = document.Descendants().FirstOrDefault(
+                element => element.Name.LocalName == "Command")?.Value;
+            string? arguments = document.Descendants().FirstOrDefault(
+                element => element.Name.LocalName == "Arguments")?.Value;
+            return command is not null &&
+                   Path.GetFullPath(command).Equals(
+                       Path.GetFullPath(InstallationManager.CurrentExecutable),
+                       StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(arguments?.Trim(), "--background", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn("STARTUP", AppLog.ExceptionSummary(ex), "startup-query", TimeSpan.FromMinutes(10));
+            return false;
+        }
+    }
 
     public static bool SetEnabled(bool enabled)
     {
         try
         {
             if (!enabled)
-                return Run("/Delete", "/TN", TaskName, "/F") == 0 || !IsEnabled();
-
-            string executable = Environment.ProcessPath ?? Application.ExecutablePath;
-            string command = $"\"{executable}\" --background";
-            int exitCode = Run("/Create", "/TN", TaskName, "/SC", "ONLOGON", "/RL", "HIGHEST",
-                "/TR", command, "/F");
-            if (exitCode != 0)
             {
-                AppLog.Error("STARTUP", $"schtasks exit={exitCode}");
-                return false;
+                ProcessResult deletion = Run("/Delete", "/TN", TaskName, "/F");
+                bool removed = deletion.ExitCode == 0 || !TaskExists();
+                if (removed) AppLog.Info("STARTUP", "disabled");
+                return removed;
             }
 
-            bool settingsApplied = ApplyPersistentSettings();
-            if (!settingsApplied)
-                AppLog.Error("STARTUP", "task settings failed");
-            return settingsApplied;
+            if (!File.Exists(InstallationManager.CurrentExecutable))
+                throw new InvalidOperationException("请先安装 NEXUS Display");
+
+            string taskCommand = $"\"{InstallationManager.CurrentExecutable}\" --background";
+            ProcessResult creation = Run(
+                "/Create", "/TN", TaskName, "/SC", "ONLOGON", "/RL", "HIGHEST",
+                "/TR", taskCommand, "/F");
+            if (creation.ExitCode != 0 || !IsEnabled())
+            {
+                AppLog.Error("STARTUP", $"create exit={creation.ExitCode}");
+                return false;
+            }
+            AppLog.Info("STARTUP", "enabled protected-target");
+            return true;
         }
         catch (Exception ex)
         {
@@ -37,7 +65,9 @@ internal static class StartupManager
         }
     }
 
-    private static int Run(params string[] arguments)
+    private static bool TaskExists() => Run("/Query", "/TN", TaskName).ExitCode == 0;
+
+    private static ProcessResult Run(params string[] arguments)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -47,54 +77,34 @@ internal static class StartupManager
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        foreach (string argument in arguments)
-            startInfo.ArgumentList.Add(argument);
+        foreach (string argument in arguments) startInfo.ArgumentList.Add(argument);
 
-        using var process = Process.Start(startInfo);
-        if (process is null) return -1;
-        process.WaitForExit(8000);
-        return process.HasExited ? process.ExitCode : -1;
-    }
-
-    private static bool ApplyPersistentSettings()
-    {
-        string script =
-            "$task=Get-ScheduledTask -TaskName 'Nexus Display Hardware Monitor';" +
-            "$task.Settings.DisallowStartIfOnBatteries=$false;" +
-            "$task.Settings.StopIfGoingOnBatteries=$false;" +
-            "$task.Settings.ExecutionTimeLimit='PT0S';" +
-            "$task.Settings.RestartCount=3;" +
-            "$task.Settings.RestartInterval='PT1M';" +
-            "$task.Settings.MultipleInstances='IgnoreNew';" +
-            "Set-ScheduledTask -InputObject $task | Out-Null";
-
-        var startInfo = new ProcessStartInfo
+        using Process? process = Process.Start(startInfo);
+        if (process is null) return new ProcessResult(-1, "", "process start failed");
+        Task<string> standardOutput = process.StandardOutput.ReadToEndAsync();
+        Task<string> standardError = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(10_000))
         {
-            FileName = Path.Combine(Environment.SystemDirectory,
-                @"WindowsPowerShell\v1.0\powershell.exe"),
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        startInfo.ArgumentList.Add("-NoProfile");
-        startInfo.ArgumentList.Add("-NonInteractive");
-        startInfo.ArgumentList.Add("-ExecutionPolicy");
-        startInfo.ArgumentList.Add("Bypass");
-        startInfo.ArgumentList.Add("-Command");
-        startInfo.ArgumentList.Add(script);
-
-        using var process = Process.Start(startInfo);
-        if (process is null) return false;
-        process.WaitForExit(12_000);
-        return process.HasExited && process.ExitCode == 0;
+            try { process.Kill(true); } catch { }
+            process.WaitForExit(2_000);
+            return new ProcessResult(-1, CompletedText(standardOutput), "timeout");
+        }
+        if (!Task.WaitAll([standardOutput, standardError], 2_000))
+            return new ProcessResult(-1, CompletedText(standardOutput), "output timeout");
+        return new ProcessResult(process.ExitCode, standardOutput.Result, standardError.Result);
     }
+
+    private static string CompletedText(Task<string> task) =>
+        task.Status == TaskStatus.RanToCompletion ? task.Result : "";
+
+    private readonly record struct ProcessResult(int ExitCode, string StandardOutput, string StandardError);
 }
 
 internal static class AppLog
 {
     private const long MaxBytes = 256 * 1024;
-    private const int RetentionDays = 14;
+    private const int RetentionDays = 7;
+    private const int MaximumMessageLength = 600;
     public static string DirectoryPath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NexusDisplay");
     private static string FilePath => Path.Combine(DirectoryPath, "NexusDisplay.log");
@@ -128,7 +138,8 @@ internal static class AppLog
 
     public static string ExceptionSummary(Exception exception)
     {
-        string message = exception.Message.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "error";
+        string message = exception.Message.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault() ?? "error";
         return $"{exception.GetType().Name}: {message}";
     }
 
@@ -143,12 +154,12 @@ internal static class AppLog
                 if (throttleKey is not null && LastThrottledWrite.TryGetValue(throttleKey, out DateTime last) &&
                     now - last < (interval ?? TimeSpan.FromMinutes(5)))
                     return;
-                if (throttleKey is not null)
-                    LastThrottledWrite[throttleKey] = now;
+                if (throttleKey is not null) LastThrottledWrite[throttleKey] = now;
 
                 Directory.CreateDirectory(DirectoryPath);
                 RotateIfNeeded();
                 string compact = message.Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ').Trim();
+                if (compact.Length > MaximumMessageLength) compact = compact[..MaximumMessageLength];
                 File.AppendAllText(FilePath,
                     $"{now:MM-dd HH:mm:ss} {level} {code} {compact}{Environment.NewLine}",
                     new System.Text.UTF8Encoding(false));
@@ -159,9 +170,7 @@ internal static class AppLog
 
     private static void RotateIfNeeded()
     {
-        if (!File.Exists(FilePath) || new FileInfo(FilePath).Length < MaxBytes)
-            return;
-
+        if (!File.Exists(FilePath) || new FileInfo(FilePath).Length < MaxBytes) return;
         string first = Path.Combine(DirectoryPath, "NexusDisplay.1.log");
         string second = Path.Combine(DirectoryPath, "NexusDisplay.2.log");
         if (File.Exists(second)) File.Delete(second);

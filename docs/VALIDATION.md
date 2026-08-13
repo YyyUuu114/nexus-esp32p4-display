@@ -1,29 +1,34 @@
-# Desktop v1.2.1 Development Validation Record
+# Desktop v2.1.1 Development Validation Record
 
 ## Build identity
 
 | Item | Value |
 | --- | --- |
-| Product version | 1.2.1 |
+| Product version | 2.1.1 |
 | Release channel | development |
-| Wire protocol | 1.1 |
+| Update classification | coordinated-breaking |
+| Wire protocol | 2.0 |
 | Target framework | `net10.0-windows` |
 | Runtime identifier | `win-x64` |
 | .NET SDK | 10.0.302 |
-| Bundled .NET runtime | 10.0.10 |
 | LibreHardwareMonitor | 0.9.6 |
-| Build date | 2026-08-09 |
+| Update signature | ECDSA P-256 / SHA-256, key `nexus-dev-2026-01` |
+| Build date | 2026-08-13 |
 
-## Build result
+## Verification summary
 
-The isolated release source completed `dotnet publish` with deterministic compilation and warnings treated as errors. The output is a self-contained single-file Windows executable; the target computer does not require a separately installed .NET runtime.
+- Release compilation completed with zero warnings and zero errors.
+- The standalone core test executable passed version ordering, energy monotonicity, strict handshake, signature tamper detection, published-envelope verification, and archive traversal rejection.
+- `tools/validate-release.ps1 -Component desktop -Channel development` passed source hygiene, metadata, branch, protected-install, startup-target, update-signature, rollback, test, and CI checks.
+- LibreHardwareMonitor 0.9.6 was restored from the pinned archive and verified before compilation.
+- The output is a self-contained, single-file Windows x64 executable. A separate .NET runtime is not required on the target computer.
+- The update package is authenticated by the project's pinned ECDSA update key. This development build does not carry a commercial Authenticode certificate, so Windows may identify the executable as an unknown publisher.
 
-The pinned LibreHardwareMonitor archive and primary library passed their SHA-256 checks before compilation. The local validation ZIP was inspected to confirm the executable, launch and startup scripts, user instructions, development channel configuration, compatibility metadata, project license, third-party notices, and MPL-2.0 license are present. Debug symbol files are excluded. The development channel intentionally has no online manifest until a reviewed development asset is published.
-
-## Release asset
+## Release assets
 
 | Asset | Size | SHA-256 |
 | --- | ---: | --- |
-| `NEXUS-Display-Windows-x64.zip` | 48,992,553 bytes | `AC0CD0134E10AED904EA5315CF3E4115B169EAC542A3ECE061D984B44FF57711` |
+| `NEXUS-Display-Windows-x64-v2.1.1.zip` | 48,997,960 bytes | `D08A18B05101FD49DDAF89BF2E51EDECAF9C7F9EB35B008D4CDF9C5C5C267B77` |
+| `NEXUS-Display-Windows-x64-v2.1.1.nexus-update.json` | 875 bytes | `4FA6F24F34806A2EBAD35AF80E752A75970FBF7E6758B871512C258F3F4D4D48` |
 
-This ZIP is a local validation artifact and is not attached to the stable v1.1.0 GitHub Release.
+Binary artifacts are distributed through the matching GitHub prerelease and are intentionally excluded from branch history.
