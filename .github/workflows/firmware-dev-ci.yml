@@ -32,4 +32,6 @@ jobs:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Build locked ESP32-P4 firmware
-        run: idf.py build
+        run: |
+          . /opt/esp/idf/export.sh
+          idf.py build
