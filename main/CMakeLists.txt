@@ -4,6 +4,8 @@ idf_component_register(
         "dashboard_ui.c"
         "serial_transport.c"
         "telemetry.c"
+        "protocol_validation.c"
+        "json_validation.c"
         "fonts/lv_font_nexus_digits_80.c"
         "fonts/lv_font_nexus_icons_44.c"
     INCLUDE_DIRS "."

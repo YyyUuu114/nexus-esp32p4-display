@@ -8,40 +8,47 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "json_validation.h"
+#include "protocol_validation.h"
 
 static const char *TAG = "nexus_telemetry";
 static SemaphoreHandle_t s_lock;
 static nexus_telemetry_t s_latest;
 
-static float optional_number(const cJSON *root, const char *name)
+static bool read_optional_number(const cJSON *root, const char *name,
+                                 float minimum, float maximum, float *out)
 {
     const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
-    if (!cJSON_IsNumber(item) || !isfinite(item->valuedouble)) {
-        return NAN;
+    if (item == NULL || cJSON_IsNull(item)) {
+        *out = NAN;
+        return true;
     }
-    return (float)item->valuedouble;
+    if (!cJSON_IsNumber(item) || !isfinite(item->valuedouble) ||
+        item->valuedouble < minimum || item->valuedouble > maximum) {
+        return false;
+    }
+    *out = (float)item->valuedouble;
+    return true;
 }
 
-static float clamp_optional(float value, float minimum, float maximum)
+static bool copy_optional_text(const cJSON *root, const char *name, const char *fallback,
+                               char *out, size_t out_size, bool (*validator)(const char *))
 {
-    if (!isfinite(value)) {
-        return NAN;
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
+    if (item == NULL || cJSON_IsNull(item)) {
+        strlcpy(out, fallback, out_size);
+        return true;
     }
-    if (value < minimum) {
-        return minimum;
+    if (!cJSON_IsString(item) || item->valuestring == NULL || !validator(item->valuestring)) {
+        return false;
     }
-    if (value > maximum) {
-        return maximum;
-    }
-    return value;
+    strlcpy(out, item->valuestring, out_size);
+    return true;
 }
 
-static float non_negative_optional(float value)
+static bool host_is_valid(const char *text)
 {
-    if (!isfinite(value) || value < 0.0f) {
-        return NAN;
-    }
-    return value;
+    return nexus_text_is_printable_ascii(text, NEXUS_HOST_MAX);
 }
 
 void telemetry_init(void)
@@ -67,21 +74,41 @@ void telemetry_init(void)
     strlcpy(s_latest.date, "----/--/--", sizeof(s_latest.date));
 }
 
-bool telemetry_parse_and_store(const char *json, size_t length)
+void telemetry_begin_session(void)
 {
-    if (json == NULL || length == 0) {
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
+        ESP_LOGW(TAG, "Telemetry mutex timeout while starting session");
+        return;
+    }
+    s_latest.valid = false;
+    s_latest.received_us = esp_timer_get_time();
+    xSemaphoreGive(s_lock);
+}
+
+bool telemetry_parse_and_store(const char *json, size_t length, const char *expected_session_nonce)
+{
+    if (json == NULL || length == 0 || length > 1024 ||
+        memchr(json, '\0', length) != NULL ||
+        !nexus_nonce_is_valid(expected_session_nonce)) {
         return false;
     }
 
-    cJSON *root = cJSON_ParseWithLength(json, length);
-    if (root == NULL) {
+    const char *parse_end = NULL;
+    cJSON *root = cJSON_ParseWithLengthOpts(json, length + 1, &parse_end, true);
+    if (root == NULL || !cJSON_IsObject(root) || parse_end != json + length ||
+        !nexus_json_object_has_unique_keys(root)) {
+        cJSON_Delete(root);
         return false;
     }
 
     const cJSON *version = cJSON_GetObjectItemCaseSensitive(root, "v");
     const cJSON *sequence = cJSON_GetObjectItemCaseSensitive(root, "seq");
-    if (!cJSON_IsNumber(version) || version->valueint != NEXUS_PROTOCOL_VERSION ||
-        !cJSON_IsNumber(sequence) || sequence->valuedouble < 0.0) {
+    const cJSON *session_nonce = cJSON_GetObjectItemCaseSensitive(root, "session_nonce");
+    if (!cJSON_IsNumber(version) || !nexus_number_is_uint32(version->valuedouble) ||
+        (uint32_t)version->valuedouble != NEXUS_PROTOCOL_VERSION ||
+        !cJSON_IsNumber(sequence) || !nexus_number_is_uint32(sequence->valuedouble) ||
+        !cJSON_IsString(session_nonce) || session_nonce->valuestring == NULL ||
+        strcmp(session_nonce->valuestring, expected_session_nonce) != 0) {
         cJSON_Delete(root);
         return false;
     }
@@ -89,32 +116,44 @@ bool telemetry_parse_and_store(const char *json, size_t length)
     nexus_telemetry_t next = {
         .valid = true,
         .seq = (uint32_t)sequence->valuedouble,
-        .cpu_load = clamp_optional(optional_number(root, "cpu_load"), 0.0f, 100.0f),
-        .cpu_temp = non_negative_optional(optional_number(root, "cpu_temp")),
-        .cpu_power = non_negative_optional(optional_number(root, "cpu_power")),
-        .gpu_load = clamp_optional(optional_number(root, "gpu_load"), 0.0f, 100.0f),
-        .gpu_temp = non_negative_optional(optional_number(root, "gpu_temp")),
-        .gpu_power = non_negative_optional(optional_number(root, "gpu_power")),
-        .session_energy_kwh = non_negative_optional(optional_number(root, "session_energy_kwh")),
-        .memory_used_gb = non_negative_optional(optional_number(root, "memory_used_gb")),
-        .memory_total_gb = non_negative_optional(optional_number(root, "memory_total_gb")),
-        .net_down_mbps = non_negative_optional(optional_number(root, "net_down_mbps")),
-        .net_up_mbps = non_negative_optional(optional_number(root, "net_up_mbps")),
-        .fan_rpm = non_negative_optional(optional_number(root, "fan_rpm")),
         .received_us = esp_timer_get_time(),
     };
 
-    const cJSON *host = cJSON_GetObjectItemCaseSensitive(root, "host");
-    const cJSON *clock = cJSON_GetObjectItemCaseSensitive(root, "clock");
-    const cJSON *date = cJSON_GetObjectItemCaseSensitive(root, "date");
-    strlcpy(next.host, cJSON_IsString(host) ? host->valuestring : "DESKTOP", sizeof(next.host));
-    strlcpy(next.clock, cJSON_IsString(clock) ? clock->valuestring : "--:--", sizeof(next.clock));
-    strlcpy(next.date, cJSON_IsString(date) ? date->valuestring : "----/--/--", sizeof(next.date));
+    const bool values_valid =
+        read_optional_number(root, "cpu_load", 0.0f, 100.0f, &next.cpu_load) &&
+        read_optional_number(root, "cpu_temp", 0.0f, 250.0f, &next.cpu_temp) &&
+        read_optional_number(root, "cpu_power", 0.0f, 5000.0f, &next.cpu_power) &&
+        read_optional_number(root, "gpu_load", 0.0f, 100.0f, &next.gpu_load) &&
+        read_optional_number(root, "gpu_temp", 0.0f, 250.0f, &next.gpu_temp) &&
+        read_optional_number(root, "gpu_power", 0.0f, 5000.0f, &next.gpu_power) &&
+        read_optional_number(root, "session_energy_kwh", 0.0f, 1000000.0f,
+                             &next.session_energy_kwh) &&
+        read_optional_number(root, "memory_used_gb", 0.0f, 65536.0f, &next.memory_used_gb) &&
+        read_optional_number(root, "memory_total_gb", 0.0f, 65536.0f, &next.memory_total_gb) &&
+        read_optional_number(root, "net_down_mbps", 0.0f, 10000000.0f, &next.net_down_mbps) &&
+        read_optional_number(root, "net_up_mbps", 0.0f, 10000000.0f, &next.net_up_mbps) &&
+        read_optional_number(root, "fan_rpm", 0.0f, 1000000.0f, &next.fan_rpm) &&
+        copy_optional_text(root, "host", "DESKTOP", next.host, sizeof(next.host), host_is_valid) &&
+        copy_optional_text(root, "clock", "--:--", next.clock, sizeof(next.clock),
+                           nexus_clock_is_valid) &&
+        copy_optional_text(root, "date", "----/--/--", next.date, sizeof(next.date),
+                           nexus_date_is_valid);
+
+    if (!values_valid ||
+        (isfinite(next.memory_used_gb) && isfinite(next.memory_total_gb) &&
+         next.memory_used_gb > next.memory_total_gb)) {
+        cJSON_Delete(root);
+        return false;
+    }
 
     cJSON_Delete(root);
 
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
         ESP_LOGW(TAG, "Telemetry mutex timeout");
+        return false;
+    }
+    if (s_latest.valid && next.seq <= s_latest.seq) {
+        xSemaphoreGive(s_lock);
         return false;
     }
     s_latest = next;

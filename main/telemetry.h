@@ -34,6 +34,7 @@ typedef struct {
 } nexus_telemetry_t;
 
 void telemetry_init(void);
-bool telemetry_parse_and_store(const char *json, size_t length);
+void telemetry_begin_session(void);
+bool telemetry_parse_and_store(const char *json, size_t length, const char *expected_session_nonce);
 void telemetry_get_snapshot(nexus_telemetry_t *out);
 bool telemetry_snapshot_is_live(const nexus_telemetry_t *snapshot, int64_t now_us);

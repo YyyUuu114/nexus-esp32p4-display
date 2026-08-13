@@ -4,7 +4,7 @@
 
 | 组件 | 固定版本/范围 | 许可证 | 官方来源 | 用途 |
 | --- | --- | --- | --- | --- |
-| Espressif ESP-IDF | `>=5.5.0,<6.0.0`；v1.1.0 已验证 5.5.2 | Apache-2.0 | https://github.com/espressif/esp-idf | 工具链、驱动与运行时 |
+| Espressif ESP-IDF | `>=5.5.0,<6.0.0`；v2.1.1 已验证 5.5.2 | Apache-2.0 | https://github.com/espressif/esp-idf | 工具链、驱动与运行时 |
 | ESP32-P4 Function EV Board BSP | 5.2.3 | Apache-2.0 | https://github.com/espressif/esp-bsp | MIPI-DSI、背光与板级初始化 |
 | LVGL | 9.5.0 | MIT | https://github.com/lvgl/lvgl | 嵌入式图形界面 |
 | Montserrat Bold | 随仓库保留的字体文件 | SIL Open Font License 1.1 | https://github.com/JulietaUla/Montserrat | 数值字形生成 |

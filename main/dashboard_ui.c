@@ -18,8 +18,6 @@ LV_FONT_DECLARE(lv_font_nexus_icons_44);
 #define SCREEN_H 600
 #define HEADER_H 61
 #define SUMMARY_Y 484
-#define ACTIVE_BRIGHTNESS_PERCENT 88
-
 #define COLOR_BG lv_color_hex(0x0b1117)
 #define COLOR_SURFACE lv_color_hex(0x10171e)
 #define COLOR_LINE lv_color_hex(0x37414a)
@@ -51,11 +49,8 @@ static lv_obj_t *s_network_up;
 static lv_obj_t *s_fan;
 static metric_view_t s_cpu;
 static metric_view_t s_gpu;
+static lv_timer_t *s_refresh_timer;
 static uint32_t s_last_history_seq = UINT32_MAX;
-static int64_t s_ui_started_us;
-static bool s_standby;
-
-static const char *TAG = "nexus_ui";
 
 static lv_obj_t *make_box(lv_obj_t *parent, int x, int y, int width, int height, lv_color_t color, lv_opa_t opacity)
 {
@@ -221,22 +216,6 @@ static void update_energy_number(lv_obj_t *label, float value)
     }
 }
 
-static void set_display_standby(bool standby)
-{
-    if (standby == s_standby) {
-        return;
-    }
-
-    esp_err_t err = standby ? bsp_display_backlight_off()
-                            : bsp_display_brightness_set(ACTIVE_BRIGHTNESS_PERCENT);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Backlight transition failed: %s", esp_err_to_name(err));
-        return;
-    }
-    s_standby = standby;
-    ESP_LOGI(TAG, "Display state: %s", standby ? "STANDBY" : "LIVE");
-}
-
 static void update_metric(metric_view_t *view, float load, float temperature, float power)
 {
     const int value = isfinite(load) ? (int)lroundf(load) : 0;
@@ -253,13 +232,6 @@ static void refresh_timer(lv_timer_t *timer)
     telemetry_get_snapshot(&data);
     const int64_t now_us = esp_timer_get_time();
     const bool live = telemetry_snapshot_is_live(&data, now_us);
-    const int64_t idle_us = data.valid ? now_us - data.received_us : now_us - s_ui_started_us;
-    const bool should_standby = !live && idle_us >= ((int64_t)NEXUS_STANDBY_AFTER_MS * 1000);
-
-    set_display_standby(should_standby);
-    if (should_standby) {
-        return;
-    }
 
     lv_label_set_text(s_host, data.host[0] != '\0' ? data.host : "DESKTOP");
     update_energy_number(s_energy, data.session_energy_kwh);
@@ -319,8 +291,7 @@ static void make_summary_band(lv_obj_t *root)
 
 void dashboard_ui_init(lv_display_t *display)
 {
-    s_ui_started_us = esp_timer_get_time();
-    s_standby = false;
+    s_last_history_seq = UINT32_MAX;
     lv_display_set_default(display);
     lv_obj_t *root = lv_display_get_screen_active(display);
     lv_obj_clean(root);
@@ -356,6 +327,14 @@ void dashboard_ui_init(lv_display_t *display)
     make_metric_panel(root, 512, "GPU", COLOR_GPU, &s_gpu);
     make_summary_band(root);
 
-    lv_timer_create(refresh_timer, 250, NULL);
+    s_refresh_timer = lv_timer_create(refresh_timer, 250, NULL);
     refresh_timer(NULL);
+}
+
+void dashboard_ui_deinit(void)
+{
+    if (s_refresh_timer != NULL) {
+        lv_timer_delete(s_refresh_timer);
+        s_refresh_timer = NULL;
+    }
 }

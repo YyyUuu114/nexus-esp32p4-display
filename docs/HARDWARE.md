@@ -2,7 +2,7 @@
 
 ## Supported assembly
 
-The v1.1.0 firmware is configured for the ESP32-P4-Function-EV-Board v1.4/v1.5 and the EK79007 1024 × 600 MIPI-DSI display kit. Board revisions with different connectors, reset routing, or panel timing require separate validation.
+The v2.1.1 development firmware is configured for the ESP32-P4-Function-EV-Board v1.4/v1.5 and the EK79007 1024 × 600 MIPI-DSI display kit. Board revisions with different connectors, reset routing, or panel timing require separate validation.
 
 ## Connection procedure
 

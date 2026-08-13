@@ -1,8 +1,10 @@
 # ESP-IDF generated state
 /build/
+/build-short/
 /sdkconfig
 /sdkconfig.old
 /managed_components/
+/artifacts/
 
 # Editor and operating-system state
 .DS_Store

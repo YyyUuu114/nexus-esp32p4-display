@@ -10,6 +10,8 @@
   "wireProtocol": {
     "format": "WIRE_MAJOR.WIRE_REVISION",
     "frameMajorField": "v",
+    "runtimeHandshakeRequired": true,
+    "sessionNonceRequired": true,
     "unknownFieldsMustBeIgnored": true,
     "optionalFieldsMayBeMissing": true,
     "majorMismatchIsCompatible": false

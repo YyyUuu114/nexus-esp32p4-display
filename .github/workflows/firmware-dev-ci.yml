@@ -1,0 +1,35 @@
+name: Firmware development validation
+
+on:
+  push:
+    branches: [firmware-dev]
+  pull_request:
+    branches: [firmware-dev, firmware-stable]
+
+permissions:
+  contents: read
+
+jobs:
+  source-validation:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Run portable validation tests
+        run: |
+          cc -std=c17 -Wall -Wextra -Werror -pedantic \
+            tests/protocol_validation_test.c main/protocol_validation.c \
+            -I main -lm -o protocol-validation-tests
+          ./protocol-validation-tests
+      - name: Validate release metadata and source hygiene
+        shell: pwsh
+        run: ./tools/validate-release.ps1 -Component firmware -Channel development
+
+  esp-idf-build:
+    runs-on: ubuntu-24.04
+    container: espressif/idf:v5.5.2
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build locked ESP32-P4 firmware
+        run: idf.py build
