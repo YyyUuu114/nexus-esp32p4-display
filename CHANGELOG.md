@@ -2,6 +2,14 @@
 
 本文件记录正式发布。开发分支的中间版本不构成稳定性承诺。
 
+## 2.1.2 — development
+
+发布分类：`single-endpoint`；线协议保持 2.0，兼容固件 v2.1.1，无需更新固件。
+
+- 将 LibreHardwareMonitor 归档中的 Windows 串口与 WMI 运行时复制到隔离依赖目录，避免同程序集标识的 Unix 实现被自包含发布误选。
+- 构建阶段固定并校验 `System.IO.Ports` 与 `System.Management` 的 SHA-256；任何平台绑定回归都会直接使构建失败。
+- Windows 核心测试实际调用串口枚举，覆盖此前仅编译无法发现的运行时错误。
+
 ## 2.1.1 — development
 
 发布分类：`coordinated-breaking`；线协议升级为 2.0，必须同步更新固件至 v2.1.1。

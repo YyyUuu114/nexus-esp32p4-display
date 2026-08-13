@@ -26,8 +26,11 @@ $packageRoot = Join-Path $containerRoot 'NEXUS Display'
 $zipPath = Join-Path $artifactRoot $assetName
 $envelopePath = Join-Path $artifactRoot $envelopeName
 $checksumsPath = Join-Path $artifactRoot 'SHA256SUMS.txt'
+$windowsPortsSha256 = '331FF3528809BF54382461FDF0FBDFDCB6C221D770DA7C755EF531801A80554A'
+$windowsManagementSha256 = '01F9360D110863F810431C4D29ADA0FCA89F267343D030E98AA823EA4C0C0EBB'
 
-& (Join-Path $PSScriptRoot 'validate-release.ps1') -Component desktop -Channel development
+& (Join-Path $PSScriptRoot 'validate-release.ps1') -Component desktop -Channel development `
+    -SkipPublishedEnvelope
 & (Join-Path $PSScriptRoot 'restore-lhm.ps1')
 
 foreach ($target in @($publishRoot, $containerRoot, $zipPath, $envelopePath, $checksumsPath)) {
@@ -50,9 +53,27 @@ New-Item -ItemType Directory -Path $publishRoot,$packageRoot -Force | Out-Null
     --no-restore
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE." }
 
+$intermediateRoot = Join-Path $repositoryRoot 'bin\Release\net10.0-windows\win-x64'
+foreach ($runtimeFile in @{
+    'System.IO.Ports.dll' = $windowsPortsSha256
+    'System.Management.dll' = $windowsManagementSha256
+}.GetEnumerator()) {
+    $runtimePath = Join-Path $intermediateRoot $runtimeFile.Key
+    if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $runtimePath -Algorithm SHA256).Hash -cne $runtimeFile.Value) {
+        throw "Published Windows runtime binding is invalid: $($runtimeFile.Key)."
+    }
+}
+
 $publishedExecutable = Join-Path $publishRoot 'Nexus Display.exe'
 if (-not (Test-Path -LiteralPath $publishedExecutable)) {
     throw 'Published output does not contain Nexus Display.exe.'
+}
+
+$runtimeTest = Start-Process -FilePath $publishedExecutable -ArgumentList '--runtime-self-test' `
+    -PassThru -Wait -WindowStyle Hidden
+if ($runtimeTest.ExitCode -ne 0) {
+    throw "Published Windows runtime self-test failed with exit code $($runtimeTest.ExitCode)."
 }
 
 if ($AuthenticodeCertificateThumbprint) {

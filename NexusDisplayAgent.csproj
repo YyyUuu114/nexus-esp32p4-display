@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>assets\nexus-display.ico</ApplicationIcon>
-    <Version>2.1.1</Version>
+    <Version>2.1.2</Version>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <FileVersion>$(Version).0</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
@@ -38,17 +38,50 @@
   <ItemGroup>
     <Compile Remove="tests\**\*.cs" />
     <Reference Include="LibreHardwareMonitorLib">
-      <HintPath>vendor\LibreHardwareMonitor\LibreHardwareMonitorLib.dll</HintPath>
+      <HintPath>vendor\NexusRuntime\LibreHardwareMonitorLib.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="System.IO.Ports">
-      <HintPath>vendor\LibreHardwareMonitor\runtimes\win\lib\net10.0\System.IO.Ports.dll</HintPath>
+      <HintPath>vendor\NexusRuntime\System.IO.Ports.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="System.Management">
-      <HintPath>vendor\LibreHardwareMonitor\runtimes\win\lib\net10.0\System.Management.dll</HintPath>
+      <HintPath>vendor\NexusRuntime\System.Management.dll</HintPath>
       <Private>true</Private>
     </Reference>
   </ItemGroup>
+
+  <!-- LibreHardwareMonitor's portable archive carries reference, Unix, and
+       Windows assemblies with the same identity. ResolveAssemblyReference can
+       otherwise select a platform implementation based on discovery order.
+       Replace the copy-local entries after resolution so the published
+       Windows application always embeds the two pinned Windows assemblies. -->
+  <Target Name="SelectPinnedWindowsRuntime" AfterTargets="ResolveReferences">
+    <ItemGroup>
+      <ReferenceCopyLocalPaths Remove="@(ReferenceCopyLocalPaths)"
+                               Condition="'%(Filename)%(Extension)' == 'System.IO.Ports.dll' Or '%(Filename)%(Extension)' == 'System.Management.dll'" />
+      <ReferenceCopyLocalPaths Include="$(MSBuildProjectDirectory)\vendor\NexusRuntime\System.IO.Ports.dll">
+        <DestinationSubDirectory></DestinationSubDirectory>
+        <CopyLocal>true</CopyLocal>
+      </ReferenceCopyLocalPaths>
+      <ReferenceCopyLocalPaths Include="$(MSBuildProjectDirectory)\vendor\NexusRuntime\System.Management.dll">
+        <DestinationSubDirectory></DestinationSubDirectory>
+        <CopyLocal>true</CopyLocal>
+      </ReferenceCopyLocalPaths>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="VerifyPinnedWindowsRuntime" AfterTargets="Build">
+    <GetFileHash Files="$(TargetDir)System.IO.Ports.dll" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="BuiltPortsHash" />
+    </GetFileHash>
+    <GetFileHash Files="$(TargetDir)System.Management.dll" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="BuiltManagementHash" />
+    </GetFileHash>
+    <Error Condition="'%(BuiltPortsHash.FileHash)' != '331FF3528809BF54382461FDF0FBDFDCB6C221D770DA7C755EF531801A80554A'"
+           Text="The build did not select the pinned Windows System.IO.Ports runtime." />
+    <Error Condition="'%(BuiltManagementHash.FileHash)' != '01F9360D110863F810431C4D29ADA0FCA89F267343D030E98AA823EA4C0C0EBB'"
+           Text="The build did not select the pinned Windows System.Management runtime." />
+  </Target>
 
 </Project>

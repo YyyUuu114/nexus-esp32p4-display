@@ -9,7 +9,7 @@ ESP32-P4 原生 USB Serial/JTAG 在 Windows 中枚举为虚拟串口。桌面端
 桌面端对 USB VID `303A`、PID `1001` 的候选端口生成 16 字节密码学随机数，以 32 个十六进制字符发送挑战：
 
 ```json
-{"type":"hello","product":"NEXUS_DESKTOP","desktop_version":"2.1.1","protocol_major":2,"protocol_revision":0,"minimum_firmware_version":"2.1.1","maximum_firmware_major_exclusive":3,"nonce":"0123456789abcdef0123456789abcdef"}
+{"type":"hello","product":"NEXUS_DESKTOP","desktop_version":"2.1.2","protocol_major":2,"protocol_revision":0,"minimum_firmware_version":"2.1.1","maximum_firmware_major_exclusive":3,"nonce":"0123456789abcdef0123456789abcdef"}
 ```
 
 固件兼容时返回：

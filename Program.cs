@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Ports;
 
 namespace NexusDisplay;
 
@@ -7,6 +8,21 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (args.Contains("--runtime-self-test", StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+                _ = SerialPort.GetPortNames();
+                Environment.ExitCode = 0;
+            }
+            catch
+            {
+                Environment.ExitCode = 20;
+            }
+            return;
+        }
+
         AppLog.Initialize();
         AppLog.Info("APP", $"start v{BuildInfo.DisplayVersion}");
         ApplicationConfiguration.Initialize();

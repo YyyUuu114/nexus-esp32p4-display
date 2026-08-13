@@ -29,6 +29,9 @@ jobs:
           dotnet restore ./NexusDisplayAgent.csproj
           dotnet build ./NexusDisplayAgent.csproj -c Release --no-restore
           dotnet run --project ./tests/NexusDisplay.Tests.csproj -c Release
+          dotnet publish ./NexusDisplayAgent.csproj -c Release --no-restore --output ./artifacts/ci-publish
+          $selfTest = Start-Process -FilePath './artifacts/ci-publish/Nexus Display.exe' -ArgumentList '--runtime-self-test' -PassThru -Wait
+          if ($selfTest.ExitCode -ne 0) { throw "Published runtime self-test failed with exit code $($selfTest.ExitCode)." }
       - name: Validate release metadata and source hygiene
         shell: pwsh
         run: ./tools/validate-release.ps1 -Component desktop -Channel development

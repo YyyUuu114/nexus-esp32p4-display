@@ -2,7 +2,7 @@
 
 ## Trust root
 
-Development v2.1.1 pins key `nexus-dev-2026-01`, an ECDSA P-256 SubjectPublicKeyInfo value recorded in `package/update-trust.json` and compiled into `BuildInfo.cs`. The private key is generated with `tools/new-update-signing-key.ps1`, stored outside the repository with a user-only ACL, and never copied into source or release assets.
+Development v2.1.1 and later pins key `nexus-dev-2026-01`, an ECDSA P-256 SubjectPublicKeyInfo value recorded in `package/update-trust.json` and compiled into `BuildInfo.cs`. The private key is generated with `tools/new-update-signing-key.ps1`, stored outside the repository with a user-only ACL, and never copied into source or release assets.
 
 The project signature protects the update manifest and package identity. It is independent of TLS and remains mandatory after HTTPS succeeds. It is not a substitute for commercial Authenticode reputation; `tools/build-release.ps1` accepts an optional certificate thumbprint when a maintainer has an appropriate code-signing certificate.
 

@@ -8,7 +8,9 @@ param(
 
     [Parameter(Mandatory)]
     [ValidateSet('stable', 'development')]
-    [string]$Channel
+    [string]$Channel,
+
+    [switch]$SkipPublishedEnvelope
 )
 
 $ErrorActionPreference = 'Stop'
@@ -143,6 +145,7 @@ if ($Component -eq 'desktop') {
     $publicMatch = [regex]::Match($buildInfo, 'UpdateSigningPublicKey\s*=\s*\r?\n?\s*"([A-Za-z0-9+/=]+)";')
     Require ($publicMatch.Success -and $publicMatch.Groups[1].Value -ceq [string]$trust.publicKeySpkiBase64) 'Compiled update public key does not match update-trust.json.'
 
+    if (-not $SkipPublishedEnvelope) {
     $envelope = Read-JsonObject (Join-Path $repositoryRoot 'package\latest-update.json')
     Require ($envelope.schemaVersion -eq 1 -and $envelope.keyId -ceq [string]$trust.keyId) 'Published envelope header is invalid.'
     $payloadBytes = [Convert]::FromBase64String([string]$envelope.payload)
@@ -170,16 +173,27 @@ if ($Component -eq 'desktop') {
              $payload.pairedFirmwareVersion -ceq [string]$release.pairedFirmwareVersion) 'Signed compatibility metadata does not match release.json.'
     Require ($payload.downloadUrl -ceq "https://github.com/YyyUuu114/nexus-esp32p4-display/releases/download/desktop-v$($release.productVersion)-dev/NEXUS-Display-Windows-x64-v$($release.productVersion).zip") 'Signed package URL is unexpected.'
     Require ([string]$payload.sha256 -match '^[A-F0-9]{64}$') 'Signed package hash is invalid.'
+    }
 
     $startupSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'StartupManager.cs') -Raw
     $installationSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'InstallationManager.cs') -Raw
     $updateSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'UpdateManager.cs') -Raw
+    $projectSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'NexusDisplayAgent.csproj') -Raw
+    $restoreSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'tools\restore-lhm.ps1') -Raw
+    $testSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'tests\Program.cs') -Raw
+    $buildSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'tools\build-release.ps1') -Raw
     Require ($startupSource.Contains('InstallationManager.CurrentExecutable', [System.StringComparison]::Ordinal)) 'Startup task must target the protected installed executable.'
     Require ($installationSource.Contains('SpecialFolder.ProgramFiles', [System.StringComparison]::Ordinal)) 'Installation must use Program Files.'
     Require (-not $updateSource.Contains('powershell.exe', [System.StringComparison]::OrdinalIgnoreCase) -and
              -not $updateSource.Contains('ExecutionPolicy', [System.StringComparison]::OrdinalIgnoreCase)) 'Updater must not generate or invoke PowerShell.'
     Require ($updateSource.Contains('ApplyAtomicSwap', [System.StringComparison]::Ordinal) -and
              $updateSource.Contains('VerifyPackageHash', [System.StringComparison]::Ordinal)) 'Atomic update and integrity gates are required.'
+    Require ($projectSource.Contains('SelectPinnedWindowsRuntime', [System.StringComparison]::Ordinal) -and
+             $projectSource.Contains('VerifyPinnedWindowsRuntime', [System.StringComparison]::Ordinal) -and
+             $restoreSource.Contains('NexusRuntime', [System.StringComparison]::Ordinal) -and
+             $restoreSource.Contains('331FF3528809BF54382461FDF0FBDFDCB6C221D770DA7C755EF531801A80554A', [System.StringComparison]::Ordinal)) 'Pinned Windows serial runtime selection is required.'
+    Require ($testSource.Contains('SerialPort.GetPortNames()', [System.StringComparison]::Ordinal) -and
+             $buildSource.Contains('--runtime-self-test', [System.StringComparison]::Ordinal)) 'Windows serial runtime tests are required.'
     Require ($candidateFiles -contains 'tests/NexusDisplay.Tests.csproj') 'Desktop core tests are required.'
     Require ($candidateFiles -contains '.github/workflows/desktop-dev-ci.yml') 'Desktop development CI is required.'
 }

@@ -1,12 +1,13 @@
-# Desktop v2.1.1 Development Validation Record
+# Desktop v2.1.2 Development Validation Record
 
 ## Build identity
 
 | Item | Value |
 | --- | --- |
-| Product version | 2.1.1 |
+| Product version | 2.1.2 |
 | Release channel | development |
-| Update classification | coordinated-breaking |
+| Update classification | single-endpoint |
+| Compatible firmware | `>=2.1.1,<3.0.0` |
 | Wire protocol | 2.0 |
 | Target framework | `net10.0-windows` |
 | Runtime identifier | `win-x64` |
@@ -18,17 +19,17 @@
 ## Verification summary
 
 - Release compilation completed with zero warnings and zero errors.
-- The standalone core test executable passed version ordering, energy monotonicity, strict handshake, signature tamper detection, published-envelope verification, and archive traversal rejection.
-- `tools/validate-release.ps1 -Component desktop -Channel development` passed source hygiene, metadata, branch, protected-install, startup-target, update-signature, rollback, test, and CI checks.
-- LibreHardwareMonitor 0.9.6 was restored from the pinned archive and verified before compilation.
-- The output is a self-contained, single-file Windows x64 executable. A separate .NET runtime is not required on the target computer.
+- The standalone Windows core test executable passed version ordering, energy monotonicity, strict handshake, Windows serial-port enumeration, signature tamper detection, published-envelope verification, and archive traversal rejection.
+- `tools/validate-release.ps1 -Component desktop -Channel development` passed source hygiene, metadata, branch, protected-install, startup-target, update-signature, rollback, runtime-binding, test, and CI checks.
+- LibreHardwareMonitor 0.9.6 was restored from the pinned archive. The isolated Windows `System.IO.Ports` and `System.Management` implementations were selected by hash after excluding the same-identity reference and Unix implementations.
+- The final self-contained single-file executable completed `--runtime-self-test`; inspection of its extracted runtime confirmed the pinned Windows serial and WMI hashes. A separate .NET runtime is not required on the target computer.
 - The update package is authenticated by the project's pinned ECDSA update key. This development build does not carry a commercial Authenticode certificate, so Windows may identify the executable as an unknown publisher.
 
 ## Release assets
 
 | Asset | Size | SHA-256 |
 | --- | ---: | --- |
-| `NEXUS-Display-Windows-x64-v2.1.1.zip` | 48,997,960 bytes | `D08A18B05101FD49DDAF89BF2E51EDECAF9C7F9EB35B008D4CDF9C5C5C267B77` |
-| `NEXUS-Display-Windows-x64-v2.1.1.nexus-update.json` | 875 bytes | `4FA6F24F34806A2EBAD35AF80E752A75970FBF7E6758B871512C258F3F4D4D48` |
+| `NEXUS-Display-Windows-x64-v2.1.2.zip` | 49,001,783 bytes | `CB7B8A06812885E80412551D7BDDB7C90CB61AACCE02B760B04D9CE43447A655` |
+| `NEXUS-Display-Windows-x64-v2.1.2.nexus-update.json` | 871 bytes | `7115D599720AE1297C3E45C91F996C51AD28C6A8F160418DA13469AFAC8AFB4C` |
 
 Binary artifacts are distributed through the matching GitHub prerelease and are intentionally excluded from branch history.

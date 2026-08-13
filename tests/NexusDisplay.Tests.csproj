@@ -1,10 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>2.1.1</Version>
+    <Version>2.1.2</Version>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
@@ -18,5 +18,9 @@
     <Compile Include="..\SignatureVerifier.cs" Link="SignatureVerifier.cs" />
     <Compile Include="..\UpdateTrust.cs" Link="UpdateTrust.cs" />
     <Compile Include="InstallationManagerStub.cs" />
+    <Reference Include="System.IO.Ports">
+      <HintPath>..\vendor\NexusRuntime\System.IO.Ports.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 </Project>

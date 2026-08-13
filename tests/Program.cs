@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.IO.Compression;
+using System.IO.Ports;
 
 namespace NexusDisplay;
 
@@ -11,6 +12,7 @@ internal static class Program
         ProductVersionRules();
         EnergyRules();
         HandshakeRules();
+        WindowsSerialRuntimeRules();
         SignatureRules();
         PackageExtractionRules();
         PublishedEnvelopeRules();
@@ -80,12 +82,25 @@ internal static class Program
         Require(!SignatureVerifier.VerifyEcdsaP256("invalid", payload, signature), "invalid key rejected");
     }
 
+    private static void WindowsSerialRuntimeRules()
+    {
+        Require(OperatingSystem.IsWindows(), "desktop tests run on Windows");
+        try
+        {
+            _ = SerialPort.GetPortNames();
+        }
+        catch (PlatformNotSupportedException exception)
+        {
+            throw new InvalidOperationException("FAIL: Windows serial runtime binding", exception);
+        }
+    }
+
     private static void PublishedEnvelopeRules()
     {
         string path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
             "..", "..", "..", "..", "package", "latest-update.json"));
         UpdatePayload payload = UpdateTrust.VerifyEnvelope(File.ReadAllText(path));
-        Require(payload.Version == "2.1.1", "published envelope version");
+        Require(payload.Version == "2.1.2", "published envelope version");
         Require(payload.ProtocolMajor == 2 && payload.ProtocolRevision == 0,
             "published envelope protocol");
         string original = File.ReadAllText(path);

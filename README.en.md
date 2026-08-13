@@ -3,14 +3,14 @@
 [![简体中文](https://img.shields.io/badge/语言-简体中文-00d9ff)](README.md)
 [![English](https://img.shields.io/badge/Language-English-6dff39)](README.en.md)
 
-[![Development](https://img.shields.io/badge/development-v2.1.1-f3b61f)](release.json)
+[![Development](https://img.shields.io/badge/development-v2.1.2-f3b61f)](release.json)
 [![Protocol](https://img.shields.io/badge/protocol-2.0-6dff39)](COMPATIBILITY.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078d4)](docs/BUILD.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 NEXUS Display is the Windows tray collector for the ESP32-P4 host telemetry display. At 1 Hz it reads CPU, GPU, memory, network, fan, temperature, and power data, sends telemetry through ESP32-P4 native USB Serial/JTAG, and estimates energy from available CPU and all-GPU power samples for the current process lifetime.
 
-This is desktop development version **2.1.1**. It introduces bidirectional device negotiation and a protected update chain, advances the wire protocol to 2.0, and is classified as `coordinated-breaking`; firmware v2.1.1 is required. Stable desktop source remains on [`desktop-stable`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/desktop-stable).
+This is desktop development version **2.1.2**. It follows the v2.1.1 protocol-2.0 paired baseline and corrects Windows serial-runtime selection in the self-contained package. The update is `single-endpoint`, remains compatible with firmware v2.1.1, and does not require another firmware update. Stable desktop source remains on [`desktop-stable`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/desktop-stable).
 
 ## Extract and double-click
 
