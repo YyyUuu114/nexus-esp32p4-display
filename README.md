@@ -3,14 +3,14 @@
 [![简体中文](https://img.shields.io/badge/语言-简体中文-00d9ff)](README.md)
 [![English](https://img.shields.io/badge/Language-English-6dff39)](README.en.md)
 
-[![Development](https://img.shields.io/badge/development-v2.1.2-f3b61f)](release.json)
+[![Development](https://img.shields.io/badge/development-v2.1.3-f3b61f)](release.json)
 [![Protocol](https://img.shields.io/badge/protocol-2.0-6dff39)](COMPATIBILITY.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078d4)](docs/BUILD.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 NEXUS Display 是 ESP32-P4 主机状态副屏的 Windows 托盘采集器。应用以 1 Hz 读取 CPU、GPU、内存、网络、风扇、温度和功耗，通过 ESP32-P4 原生 USB Serial/JTAG 发送遥测，并累计本次进程运行期间的可用 CPU 与全部 GPU 能耗估算。
 
-本分支是桌面端开发分支，当前版本为 **2.1.2**。它基于 v2.1.1 的协议 2.0 配对基线，修正自包含包选择串口 Windows 运行时的问题，分类为 `single-endpoint`；兼容固件 v2.1.1，无需再次更新固件。正式桌面端仍位于 [`desktop-stable`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/desktop-stable)。
+本分支是桌面端开发分支，当前版本为 **2.1.3**。它基于 v2.1.1 的协议 2.0 配对基线，将硬件采样、GPU 驱动查询和串口发送相互隔离，避免 CUDA 高负载拖停通信，分类为 `single-endpoint`；兼容固件 v2.1.1，无需更新固件。正式桌面端仍位于 [`desktop-stable`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/desktop-stable)。
 
 ## 解压后双击
 
@@ -32,7 +32,9 @@ NEXUS Display 是 ESP32-P4 主机状态副屏的 Windows 托盘采集器。应�
 
 ## 性能、日志与能耗
 
-- 传感器和网络计数器每秒更新一次；断开时每 3 秒扫描一次候选设备，无忙等。
+- 传感器和网络计数器每秒更新一次；串口发送使用独立的高优先级后台线程，断开时每 3 秒扫描一次候选设备，无忙等。
+- GPU 驱动查询采用单任务隔离且不允许重叠；查询延迟不会阻塞 CPU、内存、网络采样或串口心跳，超过 5 秒的 GPU 数据不会继续冒充实时值。
+- Windows 串口发送队列连续 3 秒无法排空时自动关闭并重新握手，避免仅托盘显示“正常”而设备端不再收包。
 - 主 GPU 在进程启动时按稳定规则选定，避免显示值和能耗源随瞬时负载跳换。
 - 能耗对 CPU 和所有 GPU 的有效非负功耗做梯形积分；断板不清零，应用重启才清零。
 - 日志使用短单行记录，单文件 256 KiB，保留两份历史并清理 7 天前文件。

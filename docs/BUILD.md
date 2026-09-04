@@ -18,7 +18,7 @@ dotnet run --project ./tests/NexusDisplay.Tests.csproj -c Release
 
 `restore-lhm.ps1` downloads only LibreHardwareMonitor v0.9.6 `LibreHardwareMonitor.NET.10.zip`, verifies the pinned archive and primary-DLL SHA-256 values, and extracts into ignored `vendor/`. Because that archive contains reference, Unix, and Windows assemblies with identical identities, the script also creates an isolated Windows runtime directory and verifies the selected `System.IO.Ports` and `System.Management` hashes. The console tests require no external test framework and cover product-version ordering, energy monotonicity, handshake validation, Windows serial enumeration, ECDSA verification, and the published signed envelope.
 
-Warnings are errors. Deterministic compilation and the single project `<Version>` establish assembly and file version 2.1.2. MSBuild fails the build if the output does not contain the pinned Windows serial and WMI runtime assemblies.
+Warnings are errors. Deterministic compilation and the single project `<Version>` establish assembly and file version 2.1.3. MSBuild fails the build if the output does not contain the pinned Windows serial and WMI runtime assemblies.
 
 ## Update-signing key
 

@@ -3,14 +3,14 @@
 [![简体中文](https://img.shields.io/badge/语言-简体中文-00d9ff)](README.md)
 [![English](https://img.shields.io/badge/Language-English-6dff39)](README.en.md)
 
-[![Development](https://img.shields.io/badge/development-v2.1.2-f3b61f)](release.json)
+[![Development](https://img.shields.io/badge/development-v2.1.3-f3b61f)](release.json)
 [![Protocol](https://img.shields.io/badge/protocol-2.0-6dff39)](COMPATIBILITY.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078d4)](docs/BUILD.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 NEXUS Display is the Windows tray collector for the ESP32-P4 host telemetry display. At 1 Hz it reads CPU, GPU, memory, network, fan, temperature, and power data, sends telemetry through ESP32-P4 native USB Serial/JTAG, and estimates energy from available CPU and all-GPU power samples for the current process lifetime.
 
-This is desktop development version **2.1.2**. It follows the v2.1.1 protocol-2.0 paired baseline and corrects Windows serial-runtime selection in the self-contained package. The update is `single-endpoint`, remains compatible with firmware v2.1.1, and does not require another firmware update. Stable desktop source remains on [`desktop-stable`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/desktop-stable).
+This is desktop development version **2.1.3**. It follows the v2.1.1 protocol-2.0 paired baseline and isolates hardware sampling, GPU-driver queries, and serial transmission so CUDA load cannot stall the connection. The update is `single-endpoint`, remains compatible with firmware v2.1.1, and does not require a firmware update. Stable desktop source remains on [`desktop-stable`](https://github.com/YyyUuu114/nexus-esp32p4-display/tree/desktop-stable).
 
 ## Extract and double-click
 
@@ -32,7 +32,9 @@ See [docs/SERIAL_DISCOVERY.md](docs/SERIAL_DISCOVERY.md) and [PROTOCOL.md](PROTO
 
 ## Efficiency, logs, and energy
 
-- Hardware and network counters update once per second. Disconnected discovery runs every three seconds without busy waiting.
+- Hardware and network counters update once per second. Serial transmission uses an independent high-priority background thread; disconnected discovery runs every three seconds without busy waiting.
+- GPU-driver queries run as one isolated, non-overlapping operation. A delayed query cannot block CPU, memory, network, or serial-heartbeat work, and GPU readings older than five seconds are not presented as live data.
+- A Windows serial transmit queue that remains non-empty for three consecutive seconds triggers a close and fresh handshake instead of leaving the tray in a false connected state.
 - The displayed primary GPU is selected deterministically at process start, preventing instantaneous-load switching from changing the energy source.
 - Energy integrates valid non-negative CPU and all-GPU power samples. Board disconnects do not reset it; process restart does.
 - Compact single-line logs rotate at 256 KiB, retain two history files, and remove files older than seven days.

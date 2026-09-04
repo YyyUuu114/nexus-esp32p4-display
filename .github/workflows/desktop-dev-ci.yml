@@ -34,4 +34,7 @@ jobs:
           if ($selfTest.ExitCode -ne 0) { throw "Published runtime self-test failed with exit code $($selfTest.ExitCode)." }
       - name: Validate release metadata and source hygiene
         shell: pwsh
-        run: ./tools/validate-release.ps1 -Component desktop -Channel development
+        # Branch CI validates the source candidate. The default validator mode,
+        # including an exact signed-envelope match, remains mandatory before a
+        # versioned prerelease is published.
+        run: ./tools/validate-release.ps1 -Component desktop -Channel development -SkipPublishedEnvelope

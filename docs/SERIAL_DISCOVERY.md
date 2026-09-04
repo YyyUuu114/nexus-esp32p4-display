@@ -20,7 +20,7 @@ Each telemetry frame includes the negotiated nonce. A manual reconnect closes th
 
 ## Retry and overhead
 
-The worker samples hardware once per second even while the board is absent, preserving process-session energy semantics. Candidate discovery is limited to once every three seconds. Serial reads use 200 ms sub-timeouts under an overall 1.5-second handshake deadline; no busy loop is used.
+System sampling and serial transport use independent dedicated threads. Sampling continues once per second while the board is absent, preserving process-session energy semantics, and transport continues when a hardware provider is delayed. Candidate discovery is limited to once every three seconds. Serial reads use 200 ms sub-timeouts under an overall 1.5-second handshake deadline; no busy loop is used. If the Windows transmit queue remains non-empty for three consecutive one-second cycles, the handle is treated as stalled, closed, and negotiated again.
 
 ## Driver requirements
 

@@ -4,7 +4,7 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>2.1.2</Version>
+    <Version>2.1.3</Version>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
@@ -15,6 +15,7 @@
     <Compile Include="..\ProductVersion.cs" Link="ProductVersion.cs" />
     <Compile Include="..\EnergyAccumulator.cs" Link="EnergyAccumulator.cs" />
     <Compile Include="..\ProtocolHandshake.cs" Link="ProtocolHandshake.cs" />
+    <Compile Include="..\TelemetryPipeline.cs" Link="TelemetryPipeline.cs" />
     <Compile Include="..\SignatureVerifier.cs" Link="SignatureVerifier.cs" />
     <Compile Include="..\UpdateTrust.cs" Link="UpdateTrust.cs" />
     <Compile Include="InstallationManagerStub.cs" />

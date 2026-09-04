@@ -16,21 +16,25 @@ internal readonly record struct AgentStatus(bool Connected, string? Port, string
 internal sealed class TelemetryWorker : IDisposable
 {
     private const string EspressifUsbSerialIdentity = "VID_303A&PID_1001";
-    private readonly CancellationTokenSource _stop = new();
     private readonly Computer _computer;
     private readonly IHardware[] _hardware;
+    private readonly IHardware[] _nonGpuHardware;
     private readonly IHardware? _cpu;
     private readonly IHardware[] _gpus;
     private readonly IHardware? _primaryGpu;
     private readonly EnergyAccumulator _energy = new();
-    private Task? _task;
+    private readonly TelemetryPipeline<TelemetrySnapshot> _pipeline;
     private SerialPort? _serial;
     private string? _port;
     private string? _sessionNonce;
     private ProductVersion? _firmwareVersion;
     private string? _lastVerifiedPort;
     private uint _sequence;
+    private int _serialBacklogTicks;
     private volatile bool _reconnectRequested;
+    private long _nextScanTimestamp;
+    private GpuTelemetry _latestGpu = GpuTelemetry.Empty;
+    private GpuUpdateJob? _gpuUpdate;
     private NetworkCounter? _networkPrevious;
     private bool _disposed;
 
@@ -51,13 +55,28 @@ internal sealed class TelemetryWorker : IDisposable
         _cpu = _hardware.FirstOrDefault(hardware => hardware.HardwareType == HardwareType.Cpu);
         _gpus = _hardware.Where(hardware => hardware.HardwareType is
             HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel).ToArray();
+        var gpuScope = new HashSet<IHardware>(_gpus.SelectMany(gpu => Flatten([gpu])));
+        _nonGpuHardware = _hardware.Where(hardware => !gpuScope.Contains(hardware)).ToArray();
         _primaryGpu = _gpus
             .OrderBy(hardware => hardware.HardwareType == HardwareType.GpuIntel ? 1 : 0)
             .ThenBy(hardware => hardware.Name, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
+
+        var initial = new TelemetrySnapshot(
+            SanitizeHost(Environment.MachineName),
+            null, null, null, null, null, null, 0.0,
+            null, null, null, null, null);
+        _pipeline = new TelemetryPipeline<TelemetrySnapshot>(
+            initial,
+            SampleOnce,
+            TransportOnce,
+            OnSamplingError,
+            OnTransportError,
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(1));
     }
 
-    public void Start() => _task = Task.Run(() => RunAsync(_stop.Token));
+    public void Start() => _pipeline.Start();
 
     public void RequestReconnect()
     {
@@ -65,55 +84,69 @@ internal sealed class TelemetryWorker : IDisposable
         StatusChanged?.Invoke(new AgentStatus(false, _port, "正在重新连接"));
     }
 
-    private async Task RunAsync(CancellationToken cancellationToken)
+    private TelemetrySnapshot SampleOnce()
     {
-        long nextScanTimestamp = 0;
-        while (!cancellationToken.IsCancellationRequested)
+        long started = Stopwatch.GetTimestamp();
+        TelemetrySnapshot snapshot = ReadSnapshot();
+        TimeSpan elapsed = Stopwatch.GetElapsedTime(started, Stopwatch.GetTimestamp());
+        if (elapsed >= TimeSpan.FromSeconds(3))
         {
-            try
-            {
-                if (_reconnectRequested)
-                {
-                    _reconnectRequested = false;
-                    CloseSerial();
-                    nextScanTimestamp = 0;
-                }
+            AppLog.Warn("SENSOR", $"slow {elapsed.TotalMilliseconds:0}ms",
+                "sensor-slow", TimeSpan.FromMinutes(5));
+        }
+        return snapshot;
+    }
 
-                TelemetrySnapshot snapshot = ReadSnapshot();
-                long now = Stopwatch.GetTimestamp();
-                if (_serial is null && now >= nextScanTimestamp)
-                {
-                    TryConnect();
-                    nextScanTimestamp = now + 3 * Stopwatch.Frequency;
-                }
+    private void TransportOnce(TelemetrySnapshot snapshot, TimeSpan sampleAge)
+    {
+        if (_reconnectRequested)
+        {
+            _reconnectRequested = false;
+            CloseSerial();
+            _nextScanTimestamp = 0;
+        }
 
-                if (_serial is not null && _sessionNonce is not null)
-                {
-                    TelemetryFrame frame = snapshot.ToFrame(_sequence++, _sessionNonce);
-                    _serial.WriteLine(JsonSerializer.Serialize(frame));
-                    StatusChanged?.Invoke(new AgentStatus(true, _port,
-                        $"实时发送 · CPU {Format(frame.cpu_load)}% · GPU {Format(frame.gpu_load)}%"));
-                }
-                else
-                {
-                    StatusChanged?.Invoke(new AgentStatus(false, null, "等待兼容开发板"));
-                }
+        long now = Stopwatch.GetTimestamp();
+        if (_serial is null && now >= _nextScanTimestamp)
+        {
+            TryConnect();
+            _nextScanTimestamp = now + 3 * Stopwatch.Frequency;
+        }
 
-                await Task.Delay(1000, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        if (_serial is not null && _sessionNonce is not null)
+        {
+            int queuedBytes = _serial.BytesToWrite;
+            _serialBacklogTicks = queuedBytes > 0 ? _serialBacklogTicks + 1 : 0;
+            if (_serialBacklogTicks >= 3)
+                throw new IOException($"串口发送队列持续未排空 ({queuedBytes} bytes)");
+
+            TelemetryFrame frame = snapshot.ToFrame(_sequence++, _sessionNonce);
+            _serial.WriteLine(JsonSerializer.Serialize(frame));
+            string message = sampleAge >= TimeSpan.FromSeconds(3)
+                ? $"通信正常 · 采样延迟 {Math.Min((int)sampleAge.TotalSeconds, 999)} 秒"
+                : $"实时发送 · CPU {Format(frame.cpu_load)}% · GPU {Format(frame.gpu_load)}%";
+            StatusChanged?.Invoke(new AgentStatus(true, _port, message));
+            if (sampleAge >= TimeSpan.FromSeconds(5))
             {
-                break;
-            }
-            catch (Exception ex)
-            {
-                AppLog.Error("USB", ex, "usb-loop");
-                StatusChanged?.Invoke(new AgentStatus(false, _port, "连接中断，自动重试"));
-                CloseSerial();
-                try { await Task.Delay(1500, cancellationToken); }
-                catch (OperationCanceledException) { break; }
+                AppLog.Warn("SENSOR", $"stale {sampleAge.TotalSeconds:0}s; transport alive",
+                    "sensor-stale", TimeSpan.FromMinutes(5));
             }
         }
+        else
+        {
+            StatusChanged?.Invoke(new AgentStatus(false, null, "等待兼容开发板"));
+        }
+    }
+
+    private static void OnSamplingError(Exception ex) =>
+        AppLog.Error("SENSOR", ex, "sensor-loop");
+
+    private void OnTransportError(Exception ex)
+    {
+        AppLog.Error("USB", ex, "usb-loop");
+        StatusChanged?.Invoke(new AgentStatus(false, _port, "连接中断，自动重试"));
+        CloseSerial();
+        _nextScanTimestamp = 0;
     }
 
     private void TryConnect()
@@ -147,6 +180,8 @@ internal sealed class TelemetryWorker : IDisposable
             catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or
                                               TimeoutException or InvalidDataException or InvalidOperationException)
             {
+                if (string.Equals(candidate, _lastVerifiedPort, StringComparison.OrdinalIgnoreCase))
+                    _lastVerifiedPort = null;
                 AppLog.Warn("PORT", $"reject {candidate}: {AppLog.ExceptionSummary(ex)}",
                     $"port-reject-{candidate}", TimeSpan.FromMinutes(10));
             }
@@ -163,11 +198,12 @@ internal sealed class TelemetryWorker : IDisposable
 
     private TelemetrySnapshot ReadSnapshot()
     {
-        foreach (IHardware item in _hardware)
+        foreach (IHardware item in _nonGpuHardware)
         {
             try { item.Update(); } catch { }
         }
 
+        GpuTelemetry gpu = GetGpuTelemetry();
         MemoryStatus? memory = GetMemoryStatus();
         (double? down, double? up) = GetNetworkRates();
         double? cpuLoad = Bounded(GetPreferred(_cpu is null ? [] : [_cpu], SensorType.Load,
@@ -176,32 +212,84 @@ internal sealed class TelemetryWorker : IDisposable
             ["^CPU Package$", "Tctl/Tdie", "Core Average", "Core Max"], true), 0.0, 250.0);
         double? cpuPower = Bounded(GetPreferred(_cpu is null ? [] : [_cpu], SensorType.Power,
             ["^CPU Package$", "Package", "Cores"], true), 0.0, 5000.0);
-        double? gpuLoad = Bounded(GetPreferred(_primaryGpu is null ? [] : [_primaryGpu], SensorType.Load,
-            ["^GPU Core$", "^D3D 3D$", "GPU"], true), 0.0, 100.0);
-        double? gpuTemp = Bounded(GetPreferred(_primaryGpu is null ? [] : [_primaryGpu], SensorType.Temperature,
-            ["^GPU Core$", "GPU Hot Spot", "GPU"], true), 0.0, 250.0);
-        double? gpuPower = Bounded(GetPreferred(_primaryGpu is null ? [] : [_primaryGpu], SensorType.Power,
-            ["^GPU Board Power$", "^GPU Package$", "^GPU Power$", "Board", "Package"], true),
-            0.0, 5000.0);
-
-        double? allGpuPower = SumAvailable(_gpus.Select(gpu =>
-            Bounded(GetPreferred([gpu], SensorType.Power,
-                ["^GPU Board Power$", "^GPU Package$", "^GPU Power$", "Board", "Package"], true),
-                0.0, 5000.0)));
-        double? combinedPower = SumAvailable([cpuPower, allGpuPower]);
+        double? combinedPower = SumAvailable([cpuPower, gpu.AllPower]);
         _energy.AddSample(Stopwatch.GetTimestamp(), Stopwatch.Frequency, combinedPower);
 
-        double? fan = Bounded(GetPreferred(_hardware, SensorType.Fan,
-            ["CPU", "Pump", "Chassis", "System"], true), 0.0, 1_000_000.0);
+        double? fan = Bounded(GetPreferred(_nonGpuHardware, SensorType.Fan,
+            ["CPU", "Pump", "Chassis", "System"], true), 0.0, 1_000_000.0) ?? gpu.FanRpm;
         return new TelemetrySnapshot(
             SanitizeHost(Environment.MachineName),
             cpuLoad, cpuTemp, cpuPower,
-            gpuLoad, gpuTemp, gpuPower,
+            gpu.Load, gpu.Temperature, gpu.Power,
             Math.Min(_energy.KilowattHours, 1_000_000.0),
             memory?.UsedGiB, memory?.TotalGiB,
             ClampNullable(down, 0.0, 10_000_000.0),
             ClampNullable(up, 0.0, 10_000_000.0),
             fan);
+    }
+
+    private GpuTelemetry GetGpuTelemetry()
+    {
+        if (_gpus.Length == 0) return GpuTelemetry.Empty;
+
+        GpuUpdateJob? job = _gpuUpdate;
+        if (job is null)
+        {
+            _gpuUpdate = StartGpuUpdate();
+        }
+        else if (job.Task.IsCompleted)
+        {
+            try
+            {
+                _latestGpu = job.Task.GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("GPU", ex, "gpu-provider");
+            }
+            _gpuUpdate = StartGpuUpdate();
+        }
+        else
+        {
+            TimeSpan updateAge = Stopwatch.GetElapsedTime(job.Started, Stopwatch.GetTimestamp());
+            if (updateAge >= TimeSpan.FromSeconds(3))
+            {
+                AppLog.Warn("GPU", $"provider delayed {updateAge.TotalSeconds:0}s",
+                    "gpu-provider-slow", TimeSpan.FromMinutes(5));
+            }
+        }
+
+        if (_latestGpu.Timestamp == 0 ||
+            Stopwatch.GetElapsedTime(_latestGpu.Timestamp, Stopwatch.GetTimestamp()) >= TimeSpan.FromSeconds(5))
+            return GpuTelemetry.Empty;
+        return _latestGpu;
+    }
+
+    private GpuUpdateJob StartGpuUpdate()
+    {
+        long started = Stopwatch.GetTimestamp();
+        Task<GpuTelemetry> task = Task.Run(ReadGpuTelemetry);
+        return new GpuUpdateJob(task, started);
+    }
+
+    private GpuTelemetry ReadGpuTelemetry()
+    {
+        foreach (IHardware gpu in _gpus) gpu.Update();
+
+        double? load = Bounded(GetPreferred(_primaryGpu is null ? [] : [_primaryGpu], SensorType.Load,
+            ["^GPU Core$", "^D3D 3D$", "GPU"], true), 0.0, 100.0);
+        double? temperature = Bounded(GetPreferred(_primaryGpu is null ? [] : [_primaryGpu],
+            SensorType.Temperature, ["^GPU Core$", "GPU Hot Spot", "GPU"], true), 0.0, 250.0);
+        double? power = Bounded(GetPreferred(_primaryGpu is null ? [] : [_primaryGpu], SensorType.Power,
+            ["^GPU Board Power$", "^GPU Package$", "^GPU Power$", "Board", "Package"], true),
+            0.0, 5000.0);
+        double? allPower = SumAvailable(_gpus.Select(item =>
+            Bounded(GetPreferred([item], SensorType.Power,
+                ["^GPU Board Power$", "^GPU Package$", "^GPU Power$", "Board", "Package"], true),
+                0.0, 5000.0)));
+        double? fan = Bounded(GetPreferred(_gpus, SensorType.Fan,
+            ["GPU", "Fan"], true), 0.0, 1_000_000.0);
+        return new GpuTelemetry(load, temperature, power, allPower, fan, Stopwatch.GetTimestamp());
     }
 
     private IEnumerable<string> FindCandidatePorts()
@@ -215,7 +303,7 @@ internal sealed class TelemetryWorker : IDisposable
 
         var preferred = new List<string>();
         if (_lastVerifiedPort is not null && available.Contains(_lastVerifiedPort, StringComparer.OrdinalIgnoreCase))
-            preferred.Add(_lastVerifiedPort);
+            return [_lastVerifiedPort];
 
         try
         {
@@ -391,17 +479,21 @@ internal sealed class TelemetryWorker : IDisposable
         _sessionNonce = null;
         _firmwareVersion = null;
         _port = null;
+        _serialBacklogTicks = 0;
     }
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        _stop.Cancel();
-        try { _task?.Wait(2500); } catch { }
-        CloseSerial();
-        _computer.Close();
-        _stop.Dispose();
+        PipelineStopResult stopped = _pipeline.Stop(TimeSpan.FromSeconds(3));
+        if (stopped.TransportStopped) CloseSerial();
+        else AppLog.Warn("USB", "transport thread did not stop before shutdown");
+
+        bool gpuStopped = _gpuUpdate is null || _gpuUpdate.Task.IsCompleted;
+        if (stopped.SamplingStopped && gpuStopped) _computer.Close();
+        else AppLog.Warn("SENSOR", "provider still blocked during shutdown");
+        _pipeline.Dispose();
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
@@ -424,9 +516,20 @@ internal sealed class TelemetryWorker : IDisposable
 
     private readonly record struct MemoryStatus(double UsedGiB, double TotalGiB);
     private readonly record struct NetworkCounter(ulong Received, ulong Sent, long Timestamp);
+    private sealed record GpuUpdateJob(Task<GpuTelemetry> Task, long Started);
+    private sealed record GpuTelemetry(
+        double? Load,
+        double? Temperature,
+        double? Power,
+        double? AllPower,
+        double? FanRpm,
+        long Timestamp)
+    {
+        public static GpuTelemetry Empty { get; } = new(null, null, null, null, null, 0);
+    }
 }
 
-internal readonly record struct TelemetrySnapshot(
+internal sealed record TelemetrySnapshot(
     string Host,
     double? CpuLoad,
     double? CpuTemp,

@@ -11,6 +11,7 @@ internal static class Program
     {
         ProductVersionRules();
         EnergyRules();
+        PipelineIsolationRules();
         HandshakeRules();
         WindowsSerialRuntimeRules();
         SignatureRules();
@@ -67,6 +68,40 @@ internal static class Program
         RequireThrows<InvalidDataException>(() =>
             ProtocolHandshake.ValidateReady(ready.Replace("\"type\":\"ready\"", "\"type\":\"ready\",\"type\":\"ready\""), nonce),
             "duplicate property rejected");
+    }
+
+    private static void PipelineIsolationRules()
+    {
+        using var samplerEntered = new ManualResetEventSlim(false);
+        using var releaseSampler = new ManualResetEventSlim(false);
+        int transports = 0;
+        var initial = new TestSample(7);
+        using var pipeline = new TelemetryPipeline<TestSample>(
+            initial,
+            () =>
+            {
+                samplerEntered.Set();
+                releaseSampler.Wait();
+                return new TestSample(8);
+            },
+            (sample, _) =>
+            {
+                Require(sample.Value is 7 or 8, "transport reads complete snapshot");
+                Interlocked.Increment(ref transports);
+            },
+            exception => throw new InvalidOperationException("sample callback failed", exception),
+            exception => throw new InvalidOperationException("transport callback failed", exception),
+            TimeSpan.FromMilliseconds(10),
+            TimeSpan.FromMilliseconds(10));
+
+        pipeline.Start();
+        Require(samplerEntered.Wait(TimeSpan.FromSeconds(1)), "sampler entered blocking provider");
+        Thread.Sleep(120);
+        Require(Volatile.Read(ref transports) >= 5,
+            "transport remains live while hardware provider is blocked");
+        releaseSampler.Set();
+        PipelineStopResult stopped = pipeline.Stop(TimeSpan.FromSeconds(1));
+        Require(stopped.TransportStopped && stopped.SamplingStopped, "pipeline stops cleanly");
     }
 
     private static void SignatureRules()
@@ -154,4 +189,6 @@ internal static class Program
         }
         throw new InvalidOperationException($"FAIL: {description}");
     }
+
+    private sealed record TestSample(int Value);
 }

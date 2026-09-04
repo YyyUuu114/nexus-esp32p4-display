@@ -8,13 +8,15 @@ Optional login startup is a Windows Scheduled Task created only after explicit u
 
 ## Sampling and energy
 
-One background worker owns one LibreHardwareMonitor `Computer`, one serial handle, and the enabled hardware graph. Hardware and network counters update once per second. The displayed primary GPU is chosen deterministically once instead of switching with instantaneous load.
+One LibreHardwareMonitor `Computer` owns the enabled hardware graph. System sampling and serial transport run on separate dedicated background threads at one-second intervals; serial transport uses above-normal thread priority so CPU saturation or managed thread-pool pressure cannot suppress the heartbeat. GPU updates run as one isolated asynchronous task and are never overlapped. A blocked GPU provider therefore cannot stop CPU, memory, network, or serial work. GPU readings older than five seconds are replaced with missing values until the provider recovers.
+
+The displayed primary GPU is chosen deterministically once instead of switching with instantaneous load.
 
 Session energy integrates non-negative finite CPU power plus one preferred board/package-power sensor from every GPU. Invalid, negative, or combined readings above 20 kW are discarded. Gaps over ten seconds are excluded, and increments are constrained to be non-negative, so cumulative energy is monotonic for the process lifetime. Serial disconnection does not reset it.
 
 ## Transport
 
-Candidate selection, handshake, and retry behavior are documented in [SERIAL_DISCOVERY.md](SERIAL_DISCOVERY.md). A port is connected only after protocol-2.0 mutual version and nonce validation. JSON telemetry is sent once per second with bounded values and a sanitized 15-character ASCII host label.
+Candidate selection, handshake, and retry behavior are documented in [SERIAL_DISCOVERY.md](SERIAL_DISCOVERY.md). A port is connected only after protocol-2.0 mutual version and nonce validation. The transport thread sends the latest complete immutable snapshot once per second with bounded values and a sanitized 15-character ASCII host label. A transmit queue that remains non-empty for three cycles is treated as a stalled link and reopened. When acquisition is delayed, repeated frames retain fresh sequence and wall-clock fields so firmware link supervision remains valid; the tray and throttled log expose the sample delay.
 
 ## Persistent state
 
